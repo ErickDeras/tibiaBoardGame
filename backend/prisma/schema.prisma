@@ -8,13 +8,14 @@ datasource db {
 }
 
 model Board {
-  id        String       @id @default(cuid())
-  name      String
-  width     Int          @default(12)
-  height    Int          @default(12)
-  objects   GameObject[]
-  createdAt DateTime     @default(now())
-  updatedAt DateTime     @updatedAt
+  id             String          @id @default(cuid())
+  name           String
+  width          Int             @default(12)
+  height         Int             @default(12)
+  objects        GameObject[]
+  equipmentItems EquipmentItem[]
+  createdAt      DateTime        @default(now())
+  updatedAt      DateTime        @updatedAt
 }
 
 model GameObject {
@@ -37,6 +38,16 @@ model GameObject {
   hitpoints     Int
   manaPoints    Int
   staminaPoints Int
+  valueAttack   Int         @default(0)
+  valueDefense  Int         @default(0)
+  swordSkill    Int         @default(0)
+  axeSkill      Int         @default(0)
+  maceSkill     Int         @default(0)
+  distanceSkill Int         @default(0)
+  shieldingSkill Int        @default(0)
+  magicLevel    Int         @default(0)
+  experiencePoints Int      @default(0)
+  capacityPoints Int        @default(0)
   spriteUrl     String      @default("")
   cards         Card[]
   createdAt     DateTime    @default(now())
@@ -53,9 +64,42 @@ model Card {
   description  String     @default("")
 }
 
+model EquipmentItem {
+  id             String        @id @default(cuid())
+  boardId        String
+  board          Board         @relation(fields: [boardId], references: [id], onDelete: Cascade)
+  slot           EquipmentSlot
+  name           String
+  valueAttack    Int           @default(0)
+  valueDefense   Int           @default(0)
+  swordSkill     Int           @default(0)
+  axeSkill       Int           @default(0)
+  maceSkill      Int           @default(0)
+  distanceSkill  Int           @default(0)
+  shieldingSkill Int           @default(0)
+  magicLevel     Int           @default(0)
+  weight         Int           @default(0)
+  createdAt      DateTime      @default(now())
+  updatedAt      DateTime      @updatedAt
+
+  @@unique([boardId, slot, name])
+}
+
 enum Profession {
   mago
   guerrero
   paladin
   druida
+}
+
+enum EquipmentSlot {
+  Helmet
+  Armor
+  Legs
+  Boots
+  Weapon
+  Shield_Quiver
+  Necklace
+  Ring
+  Backpack
 }

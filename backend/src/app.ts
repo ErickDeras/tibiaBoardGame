@@ -4,9 +4,11 @@ import { Prisma } from "@prisma/client";
 import { prisma } from "./prisma.js";
 import {
   createBoardSchema,
+  createEquipmentItemSchema,
   createObjectSchema,
   moveObjectSchema,
   syncObjectsSchema,
+  updateEquipmentItemSchema,
   updateBoardSchema,
   updateObjectSchema,
 } from "./validation.js";
@@ -69,6 +71,76 @@ app.get("/boards/:id/objects", async (req, res) => {
   res.json(board.objects);
 });
 
+app.get("/boards/:id/equipment-items", async (req, res) => {
+  const board = await prisma.board.findUnique({ where: { id: req.params.id } });
+  if (!board) return res.status(404).json({ message: "Board no encontrado" });
+
+  const items = await prisma.equipmentItem.findMany({
+    where: { boardId: req.params.id },
+    orderBy: [{ slot: "asc" }, { name: "asc" }],
+  });
+  res.json(items);
+});
+
+app.post("/boards/:id/equipment-items", async (req, res) => {
+  const parsed = createEquipmentItemSchema.safeParse(req.body);
+  if (!parsed.success) return res.status(400).json(parsed.error.flatten());
+
+  const board = await prisma.board.findUnique({ where: { id: req.params.id } });
+  if (!board) return res.status(404).json({ message: "Board no encontrado" });
+
+  try {
+    const item = await prisma.equipmentItem.create({
+      data: { boardId: req.params.id, ...parsed.data },
+    });
+    res.status(201).json(item);
+  } catch (error) {
+    if (
+      error instanceof Prisma.PrismaClientKnownRequestError &&
+      error.code === "P2002"
+    ) {
+      return res.status(409).json({ message: "Ya existe item con ese slot/nombre" });
+    }
+    throw error;
+  }
+});
+
+app.patch("/equipment-items/:id", async (req, res) => {
+  const parsed = updateEquipmentItemSchema.safeParse(req.body);
+  if (!parsed.success) return res.status(400).json(parsed.error.flatten());
+
+  try {
+    const item = await prisma.equipmentItem.update({
+      where: { id: req.params.id },
+      data: parsed.data,
+    });
+    res.json(item);
+  } catch (error) {
+    if (
+      error instanceof Prisma.PrismaClientKnownRequestError &&
+      error.code === "P2025"
+    ) {
+      return res.status(404).json({ message: "Item no encontrado" });
+    }
+    if (
+      error instanceof Prisma.PrismaClientKnownRequestError &&
+      error.code === "P2002"
+    ) {
+      return res.status(409).json({ message: "Ya existe item con ese slot/nombre" });
+    }
+    throw error;
+  }
+});
+
+app.delete("/equipment-items/:id", async (req, res) => {
+  try {
+    await prisma.equipmentItem.delete({ where: { id: req.params.id } });
+    res.status(204).send();
+  } catch {
+    res.status(404).json({ message: "Item no encontrado" });
+  }
+});
+
 app.post("/boards/:id/sync", async (req, res) => {
   const parsed = syncObjectsSchema.safeParse(req.body);
   if (!parsed.success) return res.status(400).json(parsed.error.flatten());
@@ -121,6 +193,16 @@ app.post("/boards/:id/sync", async (req, res) => {
         existing.hitpoints === incoming.hitpoints &&
         existing.manaPoints === incoming.manaPoints &&
         existing.staminaPoints === incoming.staminaPoints &&
+        existing.valueAttack === incoming.valueAttack &&
+        existing.valueDefense === incoming.valueDefense &&
+        existing.swordSkill === incoming.swordSkill &&
+        existing.axeSkill === incoming.axeSkill &&
+        existing.maceSkill === incoming.maceSkill &&
+        existing.distanceSkill === incoming.distanceSkill &&
+        existing.shieldingSkill === incoming.shieldingSkill &&
+        existing.magicLevel === incoming.magicLevel &&
+        existing.experiencePoints === incoming.experiencePoints &&
+        existing.capacityPoints === incoming.capacityPoints &&
         existing.spriteUrl === incoming.spriteUrl;
 
       const sameCards =
@@ -156,6 +238,16 @@ app.post("/boards/:id/sync", async (req, res) => {
           hitpoints: incoming.hitpoints,
           manaPoints: incoming.manaPoints,
           staminaPoints: incoming.staminaPoints,
+          valueAttack: incoming.valueAttack,
+          valueDefense: incoming.valueDefense,
+          swordSkill: incoming.swordSkill,
+          axeSkill: incoming.axeSkill,
+          maceSkill: incoming.maceSkill,
+          distanceSkill: incoming.distanceSkill,
+          shieldingSkill: incoming.shieldingSkill,
+          magicLevel: incoming.magicLevel,
+          experiencePoints: incoming.experiencePoints,
+          capacityPoints: incoming.capacityPoints,
           spriteUrl: incoming.spriteUrl,
         },
       });
