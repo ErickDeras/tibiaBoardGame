@@ -144,3 +144,28 @@ Incluye pruebas para:
 - El tablero es fijo de `12x12`.
 - Se permite multiples objetos por tablero, pero solo uno por celda.
 - Si quieres cambiar el host/puerto del backend, usa la variable `PORT`.
+
+## Deploy en Render (sitio estatico)
+
+Este repo incluye `render.yaml` para crear un **Static Site** en Render usando `frontend/`.
+
+### Archivos y scripts agregados para Render
+
+- `render.yaml` en la raiz del proyecto
+- Script frontend `render:build` para build en Render
+- Script frontend `start` para arranque tipo preview (util para validaciones)
+- Uso de `VITE_API_BASE_URL` en frontend para apuntar al backend desplegado
+
+### Pasos en Render
+
+1. En Render, crea un nuevo servicio desde el repositorio.
+2. Render detectara `render.yaml`.
+3. Confirma el servicio estatico `tibia-boardgame-frontend`.
+4. Define la variable de entorno:
+   - `VITE_API_BASE_URL=https://TU-BACKEND.onrender.com`
+5. Ejecuta deploy.
+
+### Importante
+
+- Este despliegue es **solo frontend estatico**.
+- El backend debe estar desplegado aparte (Render Web Service u otro proveedor) y permitir CORS desde el dominio del frontend.
