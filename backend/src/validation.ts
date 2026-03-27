@@ -42,3 +42,11 @@ export const moveObjectSchema = z.object({
   x: z.number().int().min(0).max(11),
   y: z.number().int().min(0).max(11),
 });
+
+export const syncObjectsSchema = z.object({
+  objects: z.array(
+    createObjectSchema.extend({
+      id: z.string().trim().min(1).optional(),
+    }),
+  ),
+});

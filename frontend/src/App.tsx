@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import "./App.css";
 
 type Profession = "mago" | "guerrero" | "paladin" | "druida";
@@ -41,6 +41,7 @@ type GameObject = {
 };
 
 type ObjectForm = Omit<GameObject, "id" | "boardId">;
+type SyncObjectPayload = Omit<GameObject, "boardId">;
 
 const RAW_API_BASE =
   (import.meta.env.VITE_API_BASE_URL as string | undefined)?.trim() ||
@@ -99,6 +100,7 @@ function App() {
   const [boardName, setBoardName] = useState("Nuevo tablero");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
+  const objectsRef = useRef<GameObject[]>([]);
 
   const selectedBoard = boards.find((b) => b.id === selectedBoardId);
   const selectedObject = objects.find((o) => o.id === selectedObjectId);
@@ -118,6 +120,28 @@ function App() {
   useEffect(() => {
     if (!selectedBoardId) return;
     void loadObjects(selectedBoardId);
+  }, [selectedBoardId]);
+
+  useEffect(() => {
+    objectsRef.current = objects;
+  }, [objects]);
+
+  useEffect(() => {
+    if (!selectedBoardId) return;
+
+    const autosave = setInterval(() => {
+      const payload: { objects: SyncObjectPayload[] } = {
+        objects: objectsRef.current.map((obj) => ({ ...obj })),
+      };
+      void api(`/boards/${selectedBoardId}/sync`, {
+        method: "POST",
+        body: JSON.stringify(payload),
+      }).catch((err) => {
+        setError(String(err));
+      });
+    }, 30_000);
+
+    return () => clearInterval(autosave);
   }, [selectedBoardId]);
 
   useEffect(() => {

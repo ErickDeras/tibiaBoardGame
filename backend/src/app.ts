@@ -6,6 +6,7 @@ import {
   createBoardSchema,
   createObjectSchema,
   moveObjectSchema,
+  syncObjectsSchema,
   updateBoardSchema,
   updateObjectSchema,
 } from "./validation.js";
@@ -66,6 +67,120 @@ app.get("/boards/:id/objects", async (req, res) => {
   });
   if (!board) return res.status(404).json({ message: "Board no encontrado" });
   res.json(board.objects);
+});
+
+app.post("/boards/:id/sync", async (req, res) => {
+  const parsed = syncObjectsSchema.safeParse(req.body);
+  if (!parsed.success) return res.status(400).json(parsed.error.flatten());
+
+  const board = await prisma.board.findUnique({ where: { id: req.params.id } });
+  if (!board) return res.status(404).json({ message: "Board no encontrado" });
+
+  let created = 0;
+  let updated = 0;
+  let merged = 0;
+
+  const synced = await prisma.$transaction(async (tx) => {
+    const result = [];
+    for (const incoming of parsed.data.objects) {
+      const existing = incoming.id
+        ? await tx.gameObject.findFirst({
+            where: { id: incoming.id, boardId: req.params.id },
+            include: { cards: true },
+          })
+        : null;
+
+      if (!existing) {
+        const createdObject = await tx.gameObject.create({
+          data: {
+            boardId: req.params.id,
+            ...incoming,
+            cards: { create: incoming.cards },
+          },
+          include: { cards: true },
+        });
+        created += 1;
+        result.push(createdObject);
+        continue;
+      }
+
+      const sameFields =
+        existing.x === incoming.x &&
+        existing.y === incoming.y &&
+        existing.name === incoming.name &&
+        existing.profession === incoming.profession &&
+        existing.helmet === incoming.helmet &&
+        existing.armor === incoming.armor &&
+        existing.legs === incoming.legs &&
+        existing.boots === incoming.boots &&
+        existing.weapon === incoming.weapon &&
+        existing.shield === incoming.shield &&
+        existing.ring === incoming.ring &&
+        existing.necklace === incoming.necklace &&
+        existing.backpack === incoming.backpack &&
+        existing.hitpoints === incoming.hitpoints &&
+        existing.manaPoints === incoming.manaPoints &&
+        existing.staminaPoints === incoming.staminaPoints &&
+        existing.spriteUrl === incoming.spriteUrl;
+
+      const sameCards =
+        existing.cards.length === incoming.cards.length &&
+        existing.cards.every(
+          (card, idx) =>
+            card.name === incoming.cards[idx]?.name &&
+            card.description === incoming.cards[idx]?.description,
+        );
+
+      if (sameFields && sameCards) {
+        merged += 1;
+        result.push(existing);
+        continue;
+      }
+
+      const updatedObject = await tx.gameObject.update({
+        where: { id: existing.id },
+        data: {
+          x: incoming.x,
+          y: incoming.y,
+          name: incoming.name,
+          profession: incoming.profession,
+          helmet: incoming.helmet,
+          armor: incoming.armor,
+          legs: incoming.legs,
+          boots: incoming.boots,
+          weapon: incoming.weapon,
+          shield: incoming.shield,
+          ring: incoming.ring,
+          necklace: incoming.necklace,
+          backpack: incoming.backpack,
+          hitpoints: incoming.hitpoints,
+          manaPoints: incoming.manaPoints,
+          staminaPoints: incoming.staminaPoints,
+          spriteUrl: incoming.spriteUrl,
+        },
+      });
+
+      await tx.card.deleteMany({ where: { gameObjectId: existing.id } });
+      await tx.card.createMany({
+        data: incoming.cards.map((card) => ({
+          gameObjectId: existing.id,
+          name: card.name,
+          description: card.description,
+        })),
+      });
+
+      updated += 1;
+      result.push(
+        await tx.gameObject.findUniqueOrThrow({
+          where: { id: updatedObject.id },
+          include: { cards: true },
+        }),
+      );
+    }
+    return result;
+  });
+
+  res.json({ created, updated, merged, objects: synced });
 });
 
 app.post("/boards/:id/objects", async (req, res) => {
