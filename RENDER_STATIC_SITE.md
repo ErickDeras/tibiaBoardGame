@@ -53,7 +53,7 @@ Adicionalmente, el frontend ahora muestra errores mas claros cuando no puede con
 - **Build Command**:
   - `npm --prefix backend ci && npm --prefix backend run prisma:generate && npm --prefix backend run build`
 - **Start Command**:
-  - `npm --prefix backend exec prisma db push && npm --prefix backend run start`
+  - `npm --prefix backend run prisma:push && npm --prefix backend run start`
 - **Environment Variables**:
   - `DATABASE_URL=file:/var/data/dev.db`
   - `PORT=10000`
@@ -73,6 +73,7 @@ Notas:
 - Si dejas `Publish Directory` como `dist`, no encontrara archivos.
 - Si escribes `redenr:build`, no falla ahora por el alias, pero usa `render:build` como valor correcto.
 - Si `VITE_API_BASE_URL` usa `http://` mientras el frontend esta en `https://`, el navegador bloqueara la solicitud.
+- Si Prisma no encuentra schema en runtime, usa el script `prisma:push` (ya incluido) que fija `--schema prisma/schema.prisma`.
 
 ## Verificacion rapida post-deploy
 

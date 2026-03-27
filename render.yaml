@@ -3,7 +3,7 @@ services:
     name: tibia-boardgame-backend
     runtime: node
     buildCommand: npm --prefix backend ci && npm --prefix backend run prisma:generate && npm --prefix backend run build
-    startCommand: npm --prefix backend exec prisma db push && npm --prefix backend run start
+    startCommand: npm --prefix backend run prisma:push && npm --prefix backend run start
     envVars:
       - key: DATABASE_URL
         value: file:/var/data/dev.db

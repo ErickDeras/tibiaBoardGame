@@ -9,6 +9,7 @@
     "build": "tsc -p tsconfig.json",
     "start": "node dist/server.js",
     "prisma:generate": "prisma generate",
+    "prisma:push": "prisma db push --schema prisma/schema.prisma",
     "prisma:migrate": "prisma migrate dev --name init",
     "test": "vitest run"
   },
