@@ -101,26 +101,32 @@ npm run test
 Incluye pruebas para:
 
 - Creacion de tablero y objeto
-- Movimiento adyacente con consumo de stamina
+- Movimiento adyacente con consumo de stamina (jugador) y sin coste (criatura)
 - Colision de objetos en celdas ocupadas
+- Spawn desde plantilla y `collect-loot` con capacidad
+- Sincronizacion masiva tras renombre de campos (`/boards/:id/sync`)
 
 ## Uso de la aplicacion
 
 1. Crea un tablero en el panel izquierdo.
 2. Selecciona el tablero.
 3. En el panel derecho crea un objeto con:
-   - Nombre y profesion (`mago`, `guerrero`, `paladin`, `druida`)
-   - Equipo: `helmet`, `armor`, `legs`, `boots`, `weapon`, `shield`, `ring`, `necklace`, `backpack`
-   - Stats: `hitpoints`, `manaPoints`, `staminaPoints`
+   - Tipo `PLAYER` o `CREATURE`; profesion (`mago`, `guerrero`, `paladin`, `druida`) solo para jugadores
+   - Equipo: `helmet`, `armor`, `legs`, `boots`, `weapon`, `shield`, `ring`, `necklace`, `backpackEquipment` (item equipado en slot mochila)
+   - Stats: `hitpoints`, `manaPoints`, `staminaPoints`, `attackValue`, `defenseValue`, `experienceLevel`, `gold`, `manaRegen`, `staminaRegen`, `capacityMax`
+   - Inventario (jugador): slots con `itemName`, `peso` y `cantidad` respecto a `capacityMax`
    - `spriteUrl` para mostrar imagen del sprite
-   - 5 cartas (nombre y descripcion)
+   - 5 cartas con `deckCategory`, costes opcionales de mana/stamina/capacidad
 4. Guarda el objeto.
 5. Mueve el objeto en el tablero con clic sobre una celda destino:
    - Solo permite celdas adyacentes
-   - Consume 1 punto de stamina por movimiento
+   - Consume 1 punto de stamina por movimiento para jugadores; las criaturas no gastan stamina
    - Bloquea movimiento a celdas ocupadas
-6. Usa la lista lateral para seleccionar, editar o eliminar objetos.
-7. Tambien puedes renombrar o eliminar tableros.
+6. Mazmorras: crea una mazmorra, vincula hasta 4 tableros (pisos 1–4) y cambia de piso desde el panel.
+7. Bestiario: plantillas globales con loot; modo spawn + clic en celda vacia coloca la criatura en el tablero activo.
+8. Loot: en una criatura con plantilla y entradas de loot, “Recolectar loot” envia el botin al jugador elegido si cabe en `capacityMax`.
+9. Usa la lista lateral para seleccionar, editar o eliminar objetos.
+10. Tambien puedes renombrar o eliminar tableros.
 
 ## API principal (resumen)
 
@@ -138,6 +144,27 @@ Incluye pruebas para:
 - `PATCH /objects/:id`
 - `DELETE /objects/:id`
 - `POST /objects/:id/move`
+- `POST /objects/:id/collect-loot` (body: `collectorObjectId`; solo criaturas con loot en plantilla)
+- `POST /boards/:id/sync` (sincroniza coleccion de objetos del tablero)
+
+### Mazmorras
+
+- `GET /dungeons`
+- `GET /dungeons/:id`
+- `POST /dungeons`
+- `PATCH /dungeons/:id`
+- `DELETE /dungeons/:id`
+- `POST /dungeons/:id/floors` (body: `boardId`, `floor` 1–4)
+
+### Bestiario y spawn
+
+- `GET /creature-templates`
+- `POST /creature-templates`
+- `PATCH /creature-templates/:id`
+- `DELETE /creature-templates/:id`
+- `POST /creature-templates/:id/loot`
+- `DELETE /loot-entries/:id`
+- `POST /boards/:boardId/spawn-creature` (body: `templateId`, `x`, `y`)
 
 ## Notas
 

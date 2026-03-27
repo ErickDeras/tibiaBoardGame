@@ -7,6 +7,29 @@ datasource db {
   url      = env("DATABASE_URL")
 }
 
+model Dungeon {
+  id          String         @id @default(cuid())
+  name        String
+  notes       String         @default("")
+  targetLevel Int?
+  floors      DungeonBoard[]
+  createdAt   DateTime       @default(now())
+  updatedAt   DateTime       @updatedAt
+}
+
+model DungeonBoard {
+  id        String   @id @default(cuid())
+  dungeonId String
+  dungeon   Dungeon  @relation(fields: [dungeonId], references: [id], onDelete: Cascade)
+  boardId   String   @unique
+  board     Board    @relation(fields: [boardId], references: [id], onDelete: Cascade)
+  floor     Int
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([dungeonId, floor])
+}
+
 model Board {
   id             String          @id @default(cuid())
   name           String
@@ -14,54 +37,113 @@ model Board {
   height         Int             @default(12)
   objects        GameObject[]
   equipmentItems EquipmentItem[]
+  dungeonLink    DungeonBoard?
   createdAt      DateTime        @default(now())
   updatedAt      DateTime        @updatedAt
 }
 
 model GameObject {
-  id            String      @id @default(cuid())
-  boardId       String
-  board         Board       @relation(fields: [boardId], references: [id], onDelete: Cascade)
-  x             Int
-  y             Int
-  name          String
-  profession    Profession
-  helmet        String      @default("")
-  armor         String      @default("")
-  legs          String      @default("")
-  boots         String      @default("")
-  weapon        String      @default("")
-  shield        String      @default("")
-  ring          String      @default("")
-  necklace      String      @default("")
-  backpack      String      @default("")
-  hitpoints     Int
-  manaPoints    Int
-  staminaPoints Int
-  valueAttack   Int         @default(0)
-  valueDefense  Int         @default(0)
-  swordSkill    Int         @default(0)
-  axeSkill      Int         @default(0)
-  maceSkill     Int         @default(0)
-  distanceSkill Int         @default(0)
-  shieldingSkill Int        @default(0)
-  magicLevel    Int         @default(0)
-  experiencePoints Int      @default(0)
-  capacityPoints Int        @default(0)
-  spriteUrl     String      @default("")
-  cards         Card[]
-  createdAt     DateTime    @default(now())
-  updatedAt     DateTime    @updatedAt
+  id                 String           @id @default(cuid())
+  boardId            String
+  board              Board            @relation(fields: [boardId], references: [id], onDelete: Cascade)
+  x                  Int
+  y                  Int
+  name               String
+  objectKind         ObjectKind       @default(PLAYER)
+  profession         Profession?
+  creatureTemplateId String?
+  creatureTemplate   CreatureTemplate? @relation(fields: [creatureTemplateId], references: [id], onDelete: SetNull)
+  helmet             String           @default("")
+  armor              String           @default("")
+  legs               String           @default("")
+  boots              String           @default("")
+  weapon             String           @default("")
+  shield             String           @default("")
+  ring               String           @default("")
+  necklace           String           @default("")
+  backpackEquipment  String           @default("")
+  hitpoints          Int
+  manaPoints         Int
+  staminaPoints      Int
+  attackValue        Int              @default(0)
+  defenseValue       Int              @default(0)
+  magicAttackValue   Int              @default(0)
+  swordSkill         Int              @default(0)
+  axeSkill           Int              @default(0)
+  maceSkill          Int              @default(0)
+  distanceSkill      Int              @default(0)
+  shieldingSkill     Int              @default(0)
+  magicLevel         Int              @default(0)
+  experiencePoints   Int              @default(0)
+  experienceLevel    Int              @default(1)
+  gold               Int              @default(0)
+  manaRegen          Int              @default(0)
+  staminaRegen       Int              @default(0)
+  capacityMax        Int              @default(0)
+  spriteUrl          String           @default("")
+  cards              Card[]
+  inventorySlots     InventorySlot[]
+  createdAt          DateTime         @default(now())
+  updatedAt          DateTime         @updatedAt
 
   @@unique([boardId, x, y])
 }
 
-model Card {
+model InventorySlot {
   id           String     @id @default(cuid())
   gameObjectId String
   gameObject   GameObject @relation(fields: [gameObjectId], references: [id], onDelete: Cascade)
+  slotIndex    Int
+  itemName     String
+  weight       Int        @default(0)
+  quantity     Int        @default(1)
+
+  @@unique([gameObjectId, slotIndex])
+}
+
+model Card {
+  id           String       @id @default(cuid())
+  gameObjectId String
+  gameObject   GameObject   @relation(fields: [gameObjectId], references: [id], onDelete: Cascade)
   name         String
-  description  String     @default("")
+  description  String       @default("")
+  deckCategory DeckCategory @default(SPELL_ATTACK)
+  manaCost         Int?
+  staminaCost      Int?
+  capacityCost     Int?
+  rapidSpell       Boolean  @default(false)
+  spellSkillBonus  Int      @default(0)
+  critMultiplier   Int?
+}
+
+model CreatureTemplate {
+  id             String      @id @default(cuid())
+  name           String
+  spriteUrl      String      @default("")
+  hitpoints      Int         @default(10)
+  manaPoints     Int         @default(0)
+  staminaPoints  Int         @default(0)
+  attackValue    Int         @default(0)
+  defenseValue   Int         @default(0)
+  swordSkill     Int         @default(0)
+  axeSkill       Int         @default(0)
+  maceSkill      Int         @default(0)
+  distanceSkill  Int         @default(0)
+  shieldingSkill Int         @default(0)
+  magicLevel     Int         @default(0)
+  lootEntries    LootEntry[]
+  instances      GameObject[]
+  createdAt      DateTime    @default(now())
+  updatedAt      DateTime    @updatedAt
+}
+
+model LootEntry {
+  id                 String           @id @default(cuid())
+  creatureTemplateId String
+  creatureTemplate   CreatureTemplate @relation(fields: [creatureTemplateId], references: [id], onDelete: Cascade)
+  itemName           String
+  weight             Int              @default(0)
+  quantity           Int              @default(1)
 }
 
 model EquipmentItem {
@@ -90,6 +172,26 @@ enum Profession {
   guerrero
   paladin
   druida
+}
+
+enum ObjectKind {
+  PLAYER
+  CREATURE
+}
+
+enum DeckCategory {
+  SPELL_ATTACK
+  SPELL_SUPPORT
+  SPELL_DEFENSIVE
+  SPELL_HEALING
+  RUNE_ATTACK
+  RUNE_SUPPORT
+  RUNE_DEFENSIVE
+  RUNE_HEALING
+  ITEM_ATTACK
+  ITEM_SUPPORT
+  ITEM_DEFENSIVE
+  ITEM_HEALING
 }
 
 enum EquipmentSlot {

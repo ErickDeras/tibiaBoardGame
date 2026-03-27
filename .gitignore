@@ -5,4 +5,6 @@ frontend/dist/
 backend/dist/
 backend/dev.db
 backend/dev.db-journal
+backend/prisma/*.db
+backend/prisma/*.db-journal
 .DS_Store

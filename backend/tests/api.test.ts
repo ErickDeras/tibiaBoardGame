@@ -3,16 +3,82 @@ import { beforeEach, describe, expect, it } from "vitest";
 import { app } from "../src/app.js";
 import { prisma } from "../src/prisma.js";
 
+function cardStub(i: number) {
+  return {
+    name: `Card ${i + 1}`,
+    description: `Desc ${i + 1}`,
+    deckCategory: "SPELL_ATTACK" as const,
+    manaCost: null as number | null,
+    staminaCost: null as number | null,
+    capacityCost: null as number | null,
+    rapidSpell: false,
+    spellSkillBonus: 0,
+    critMultiplier: null as number | null,
+  };
+}
+
+const baseObjectBody = {
+  helmet: "",
+  armor: "",
+  legs: "",
+  boots: "",
+  weapon: "Sword",
+  shield: "Viking Shield",
+  ring: "",
+  necklace: "",
+  backpackEquipment: "",
+  hitpoints: 100,
+  manaPoints: 20,
+  staminaPoints: 2,
+  spriteUrl: "",
+  objectKind: "PLAYER" as const,
+  profession: "guerrero" as const,
+  attackValue: 5,
+  defenseValue: 3,
+  magicAttackValue: 0,
+  experiencePoints: 0,
+  experienceLevel: 1,
+  gold: 0,
+  manaRegen: 0,
+  staminaRegen: 0,
+  capacityMax: 500,
+  inventorySlots: [] as { slotIndex: number; itemName: string; weight: number; quantity: number }[],
+  cards: Array.from({ length: 5 }).map((_, i) => cardStub(i)),
+};
+
+/** Arma 10 atk, escudo 4 def (servidor recalcula PLAYER desde equipo + nivel). */
+async function seedMeleeGear(boardId: string) {
+  await request(app).post(`/boards/${boardId}/equipment-items`).send({
+    slot: "Weapon",
+    name: "Sword",
+    valueAttack: 10,
+    valueDefense: 0,
+  });
+  await request(app).post(`/boards/${boardId}/equipment-items`).send({
+    slot: "Shield_Quiver",
+    name: "Viking Shield",
+    valueAttack: 0,
+    valueDefense: 4,
+  });
+}
+
 beforeEach(async () => {
+  await prisma.lootEntry.deleteMany();
+  await prisma.creatureTemplate.deleteMany();
+  await prisma.dungeonBoard.deleteMany();
+  await prisma.dungeon.deleteMany();
   await prisma.card.deleteMany();
+  await prisma.inventorySlot.deleteMany();
   await prisma.gameObject.deleteMany();
+  await prisma.equipmentItem.deleteMany();
   await prisma.board.deleteMany();
 });
 
 describe("board/object api", () => {
-  it("creates a board and object", async () => {
+  it("creates a board and object; attack/defense from equipment rule", async () => {
     const boardRes = await request(app).post("/boards").send({ name: "Tablero test" });
     expect(boardRes.status).toBe(201);
+    await seedMeleeGear(boardRes.body.id);
 
     const objectRes = await request(app)
       .post(`/boards/${boardRes.body.id}/objects`)
@@ -20,54 +86,46 @@ describe("board/object api", () => {
         x: 0,
         y: 0,
         name: "Knight",
-        profession: "guerrero",
-        helmet: "",
-        armor: "",
-        legs: "",
-        boots: "",
-        weapon: "Sword",
-        shield: "Viking Shield",
-        ring: "",
-        necklace: "",
-        backpack: "",
-        hitpoints: 100,
-        manaPoints: 20,
-        staminaPoints: 2,
-        spriteUrl: "",
-        cards: Array.from({ length: 5 }).map((_, i) => ({
-          name: `Card ${i + 1}`,
-          description: `Desc ${i + 1}`,
-        })),
+        ...baseObjectBody,
       });
 
     expect(objectRes.status).toBe(201);
     expect(objectRes.body.cards).toHaveLength(5);
+    expect(objectRes.body.attackValue).toBe(10);
+    expect(objectRes.body.defenseValue).toBe(4);
+    expect(objectRes.body.magicAttackValue).toBe(10);
+    expect(objectRes.body.backpackEquipment).toBe("");
   });
 
-  it("moves only to adjacent cell and consumes stamina", async () => {
+  it("moves only to adjacent cell and consumes stamina for PLAYER", async () => {
     const boardRes = await request(app).post("/boards").send({ name: "Move Board" });
+    await request(app).post(`/boards/${boardRes.body.id}/equipment-items`).send({
+      slot: "Weapon",
+      name: "Wand",
+      valueAttack: 3,
+      valueDefense: 0,
+      magicLevel: 2,
+    });
+    await request(app).post(`/boards/${boardRes.body.id}/equipment-items`).send({
+      slot: "Shield_Quiver",
+      name: "Spellbook",
+      valueAttack: 0,
+      valueDefense: 1,
+    });
+
     const objectRes = await request(app)
       .post(`/boards/${boardRes.body.id}/objects`)
       .send({
         x: 1,
         y: 1,
         name: "Mage",
+        ...baseObjectBody,
         profession: "mago",
-        helmet: "",
-        armor: "",
-        legs: "",
-        boots: "",
         weapon: "Wand",
         shield: "Spellbook",
-        ring: "",
-        necklace: "",
-        backpack: "",
-        hitpoints: 70,
-        manaPoints: 120,
         staminaPoints: 1,
-        spriteUrl: "",
         cards: Array.from({ length: 5 }).map((_, i) => ({
-          name: `Card ${i + 1}`,
+          ...cardStub(i),
           description: "",
         })),
       });
@@ -89,25 +147,39 @@ describe("board/object api", () => {
     expect(nonAdjacent.status).toBe(400);
   });
 
+  it("CREATURE moves without stamina cost", async () => {
+    const boardRes = await request(app).post("/boards").send({ name: "Creature Board" });
+    const creature = await request(app).post(`/boards/${boardRes.body.id}/objects`).send({
+      ...baseObjectBody,
+      x: 0,
+      y: 0,
+      name: "Rat",
+      objectKind: "CREATURE",
+      profession: null,
+      weapon: "",
+      shield: "",
+      staminaPoints: 0,
+    });
+    expect(creature.status).toBe(201);
+    const moved = await request(app)
+      .post(`/objects/${creature.body.id}/move`)
+      .send({ x: 1, y: 0 });
+    expect(moved.status).toBe(200);
+    expect(moved.body.staminaPoints).toBe(0);
+  });
+
   it("blocks movement into occupied cell", async () => {
     const boardRes = await request(app).post("/boards").send({ name: "Collision Board" });
     const basePayload = {
-      profession: "paladin",
-      helmet: "",
-      armor: "",
-      legs: "",
-      boots: "",
+      ...baseObjectBody,
+      profession: "paladin" as const,
       weapon: "",
       shield: "",
-      ring: "",
-      necklace: "",
-      backpack: "",
       hitpoints: 90,
       manaPoints: 40,
       staminaPoints: 2,
-      spriteUrl: "",
       cards: Array.from({ length: 5 }).map((_, i) => ({
-        name: `Card ${i + 1}`,
+        ...cardStub(i),
         description: "",
       })),
     };
@@ -121,5 +193,151 @@ describe("board/object api", () => {
 
     const moveRes = await request(app).post(`/objects/${a.body.id}/move`).send({ x: 1, y: 0 });
     expect(moveRes.status).toBe(409);
+  });
+
+  it("PLAYER experienceLevel is derived from experiencePoints", async () => {
+    const boardRes = await request(app).post("/boards").send({ name: "XP Board" });
+    await seedMeleeGear(boardRes.body.id);
+    const objectRes = await request(app)
+      .post(`/boards/${boardRes.body.id}/objects`)
+      .send({
+        x: 0,
+        y: 0,
+        name: "Hero",
+        ...baseObjectBody,
+        experiencePoints: 230,
+        experienceLevel: 1,
+      });
+    expect(objectRes.status).toBe(201);
+    expect(objectRes.body.experienceLevel).toBe(2);
+    expect(objectRes.body.attackValue).toBe(Math.floor(10 * (1 + 0.05 * (2 - 1))));
+  });
+});
+
+describe("spawn and loot", () => {
+  it("spawns creature from template", async () => {
+    const boardRes = await request(app).post("/boards").send({ name: "Spawn Board" });
+    const tplRes = await request(app).post("/creature-templates").send({
+      name: "Orc",
+      hitpoints: 40,
+      attackValue: 8,
+    });
+    expect(tplRes.status).toBe(201);
+
+    const spawnRes = await request(app).post(`/boards/${boardRes.body.id}/spawn-creature`).send({
+      templateId: tplRes.body.id,
+      x: 2,
+      y: 3,
+    });
+    expect(spawnRes.status).toBe(201);
+    expect(spawnRes.body.objectKind).toBe("CREATURE");
+    expect(spawnRes.body.name).toBe("Orc");
+    expect(spawnRes.body.x).toBe(2);
+    expect(spawnRes.body.y).toBe(3);
+  });
+
+  it("collect-loot transfers items when capacity allows", async () => {
+    const boardRes = await request(app).post("/boards").send({ name: "Loot Board" });
+    await seedMeleeGear(boardRes.body.id);
+
+    const playerRes = await request(app).post(`/boards/${boardRes.body.id}/objects`).send({
+      x: 0,
+      y: 0,
+      name: "Hero",
+      ...baseObjectBody,
+      capacityMax: 100,
+      inventorySlots: [],
+    });
+    expect(playerRes.status).toBe(201);
+
+    const tplRes = await request(app).post("/creature-templates").send({ name: "Slime" });
+    await request(app).post(`/creature-templates/${tplRes.body.id}/loot`).send({
+      itemName: "Gold Coin",
+      weight: 10,
+      quantity: 2,
+    });
+
+    const spawnRes = await request(app).post(`/boards/${boardRes.body.id}/spawn-creature`).send({
+      templateId: tplRes.body.id,
+      x: 5,
+      y: 5,
+    });
+    expect(spawnRes.status).toBe(201);
+
+    const lootRes = await request(app)
+      .post(`/objects/${spawnRes.body.id}/collect-loot`)
+      .send({ collectorObjectId: playerRes.body.id });
+
+    expect(lootRes.status).toBe(200);
+
+    const hero = await request(app).get(`/boards/${boardRes.body.id}/objects`);
+    const updated = hero.body.find((o: { id: string }) => o.id === playerRes.body.id);
+    expect(updated.inventorySlots.length).toBeGreaterThan(0);
+    const totalW = updated.inventorySlots.reduce(
+      (s: number, sl: { weight: number; quantity: number }) => s + sl.weight * sl.quantity,
+      0,
+    );
+    expect(totalW).toBe(20);
+  });
+
+  it("sync accepts GameObject fields and magicAttackValue", async () => {
+    const boardRes = await request(app).post("/boards").send({ name: "Sync Board" });
+    await seedMeleeGear(boardRes.body.id);
+    const obj = await request(app).post(`/boards/${boardRes.body.id}/objects`).send({
+      x: 0,
+      y: 0,
+      name: "SyncMe",
+      ...baseObjectBody,
+      attackValue: 7,
+      defenseValue: 2,
+    });
+    expect(obj.status).toBe(201);
+
+    const syncRes = await request(app)
+      .post(`/boards/${boardRes.body.id}/sync`)
+      .send({
+        objects: [
+          {
+            id: obj.body.id,
+            x: 0,
+            y: 0,
+            name: "SyncMe",
+            objectKind: "PLAYER",
+            profession: "guerrero",
+            creatureTemplateId: null,
+            helmet: "",
+            armor: "",
+            legs: "",
+            boots: "",
+            weapon: "Sword",
+            shield: "Viking Shield",
+            ring: "",
+            necklace: "",
+            backpackEquipment: "",
+            hitpoints: 100,
+            manaPoints: 20,
+            staminaPoints: 2,
+            attackValue: 7,
+            defenseValue: 2,
+            magicAttackValue: 0,
+            swordSkill: 0,
+            axeSkill: 0,
+            maceSkill: 0,
+            distanceSkill: 0,
+            shieldingSkill: 0,
+            magicLevel: 0,
+            experiencePoints: 0,
+            experienceLevel: 1,
+            gold: 0,
+            manaRegen: 0,
+            staminaRegen: 0,
+            capacityMax: 500,
+            spriteUrl: "",
+            cards: Array.from({ length: 5 }).map((_, i) => cardStub(i)),
+            inventorySlots: [],
+          },
+        ],
+      });
+    expect(syncRes.status).toBe(200);
   });
 });
