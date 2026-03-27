@@ -1,0 +1,61 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+model Board {
+  id        String       @id @default(cuid())
+  name      String
+  width     Int          @default(12)
+  height    Int          @default(12)
+  objects   GameObject[]
+  createdAt DateTime     @default(now())
+  updatedAt DateTime     @updatedAt
+}
+
+model GameObject {
+  id            String      @id @default(cuid())
+  boardId       String
+  board         Board       @relation(fields: [boardId], references: [id], onDelete: Cascade)
+  x             Int
+  y             Int
+  name          String
+  profession    Profession
+  helmet        String      @default("")
+  armor         String      @default("")
+  legs          String      @default("")
+  boots         String      @default("")
+  weapon        String      @default("")
+  shield        String      @default("")
+  ring          String      @default("")
+  necklace      String      @default("")
+  backpack      String      @default("")
+  hitpoints     Int
+  manaPoints    Int
+  staminaPoints Int
+  spriteUrl     String      @default("")
+  cards         Card[]
+  createdAt     DateTime    @default(now())
+  updatedAt     DateTime    @updatedAt
+
+  @@unique([boardId, x, y])
+}
+
+model Card {
+  id           String     @id @default(cuid())
+  gameObjectId String
+  gameObject   GameObject @relation(fields: [gameObjectId], references: [id], onDelete: Cascade)
+  name         String
+  description  String     @default("")
+}
+
+enum Profession {
+  mago
+  guerrero
+  paladin
+  druida
+}

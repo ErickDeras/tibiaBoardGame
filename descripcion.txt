@@ -1,0 +1,134 @@
+## Reglas juego de meza por campaña
+establecer las reglas de construccion de mazo por profesion
+
+4 profesiones (hitpoints, mana points, stamine points)
+- mago: 30 cartas
+- guerrero: 30 cartas
+- paladin: 30 cartas
+- druida: 30 cartas
+
+##decks
+-player deck
+ -spell deck
+ -attack spells
+ -support spells
+ -defensive spells
+ -healing spells
+ -runes deck
+ -attack runes
+ -support runes
+ -defensive runes
+ -healing runes
+ -items deck
+ -attack items
+ -support items
+ -defensive items
+ -healing items
+
+ ## stamina
+-Las acciones usan stamina
+-
+
+## Indicadores por jugador
+- nivel
+- experiencia
+- oro
+- manas
+- stamina
+- capacity
+- mana regen
+- stamina regen
+
+## Equipment
+-weapons (por clase)
+ -bows
+ -crossbows
+ -swords
+ -axes
+ -maces
+ -hammers
+ -wands
+ -rods
+
+-shields (por clase)
+ -spellbooks
+-armor (por clase)
+-helmets (por clase)
+-boots (por clase)
+-rings (por clase)
+-necklaces (por clase)
+-legs (por clase)
+-backpacks (por clase)
+-
+
+## Mounts
+-nombre
+-habilidad: +1 al movimiento por turno
+-habilidad: +1 al ataque por turno
+-habilidad: +1 al defensa por turno
+-habilidad: +10 capacity
+
+## tablero de jugeador
+- nivel
+- experiencia
+- oro
+- manas
+- stamina
+- capacity
+- mana regen
+- equipment
+- spells
+ -attack spells (seleccionar activos por mazmorra)
+ -support spells (seleccionar activos por mazmorra)
+ -defensive spells (seleccionar activos por mazmorra)
+ -healing spells (seleccionar activos por mazmorra)
+- runes (adicional usan capacity)
+ -attack runes (seleccionar activos por mazmorra)
+ -support runes (seleccionar activos por mazmorra)
+ -defensive runes (seleccionar activos por mazmorra)
+ -healing runes (seleccionar activos por mazmorra)
+- items (adicional usan capacity)
+ -support items (seleccionar activos por mazmorra)
+ -defensive items (seleccionar activos por mazmorra)
+ -healing items (seleccionar activos por mazmorra)
+- mounts
+
+##deposit stage
+- cambiar equipo, comprar items, etc
+- druidas generan UH runes, IH runes, avalanches runes
+- magos generan SD runes, great fireball runes
+- guerreros generan Great healing potion, Stone skin amulets
+- paladines generan diamond arrows, divine caldera runes
+
+## tablero de mazmorra
+-nombre
+-sqm
+-nivel
+- enemigos
+- recompensas
+- items
+-traps
+
+## tipos de cartas
+-spells: usar manas, se regeneran x manas por turno
+-runes: usar stamina, la estamina solo se regenera al final de campaña
+-items: cartas no reutilizables, solo se pueden reponer al final de campaña
+-equipment: usan capacity, solo se pueden reemplazar en safe stage, usar backpack deck
+-mounts:
+
+## Reglas para ganar nivel
+- tabla de recompensas por campaña
+
+##Fases del juego
+- depot stage: cambiar equipo, comprar items, etc
+- safe stage: ganar experiencia, ganar oro, etc
+- battle stage: luchar contra otros jugadores
+- quest stage: completar quests
+- event stage: participar en eventos
+- daily stage: completar daily quests
+- weekly stage: completar weekly quests
+- monthly stage: completar monthly quests
+
+## reglas de construccion de mazo
+
+## Opcional: tablero inteligente que gestione un agente de IA que juegue el rol de mazmorra, entorno, mobs de calabozo, etc

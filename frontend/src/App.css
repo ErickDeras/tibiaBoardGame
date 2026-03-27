@@ -1,0 +1,130 @@
+.layout {
+  display: grid;
+  grid-template-columns: 280px 1fr 380px;
+  min-height: 100vh;
+}
+
+.sidebar,
+.editor {
+  border-right: 1px solid #ddd;
+  padding: 12px;
+  overflow: auto;
+}
+
+.editor {
+  border-right: 0;
+  border-left: 1px solid #ddd;
+}
+
+.main {
+  padding: 12px;
+}
+
+.toolbar {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  margin-bottom: 12px;
+}
+
+.board {
+  display: grid;
+  grid-template-columns: repeat(12, minmax(0, 1fr));
+  gap: 4px;
+}
+
+.cell {
+  min-height: 56px;
+  border: 1px solid #aaa;
+  background: #f7f7f7;
+  padding: 2px;
+}
+
+.cell.active {
+  outline: 2px solid #7c3aed;
+}
+
+.spriteWrap {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  font-size: 10px;
+  line-height: 1.2;
+}
+
+.sprite {
+  width: 28px;
+  height: 28px;
+  object-fit: cover;
+  border-radius: 4px;
+}
+
+.coords {
+  font-size: 10px;
+  color: #777;
+}
+
+.block {
+  margin-bottom: 16px;
+}
+
+.item {
+  display: block;
+  width: 100%;
+  text-align: left;
+  margin-bottom: 6px;
+  padding: 6px;
+}
+
+.selected {
+  background: #e9d5ff;
+}
+
+.row {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-top: 8px;
+}
+
+.row3 {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.form {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+label {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 13px;
+}
+
+input,
+select,
+button {
+  padding: 6px;
+}
+
+.cardRow {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+}
+
+.preview img {
+  max-width: 120px;
+  border: 1px solid #ddd;
+}
+
+.error {
+  color: #b91c1c;
+  font-size: 12px;
+  max-width: 450px;
+}
