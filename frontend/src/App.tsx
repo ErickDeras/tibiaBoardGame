@@ -42,9 +42,10 @@ type GameObject = {
 
 type ObjectForm = Omit<GameObject, "id" | "boardId">;
 
-const API_BASE =
+const RAW_API_BASE =
   (import.meta.env.VITE_API_BASE_URL as string | undefined)?.trim() ||
   "http://localhost:4000";
+const API_BASE = RAW_API_BASE.replace(/\/+$/, "");
 
 const newCard = (n: number): Card => ({ name: `Carta ${n}`, description: "" });
 
@@ -70,10 +71,17 @@ const emptyForm: ObjectForm = {
 };
 
 async function api<T>(path: string, init?: RequestInit): Promise<T> {
-  const response = await fetch(`${API_BASE}${path}`, {
-    headers: { "Content-Type": "application/json", ...(init?.headers ?? {}) },
-    ...init,
-  });
+  let response: Response;
+  try {
+    response = await fetch(`${API_BASE}${path}`, {
+      headers: { "Content-Type": "application/json", ...(init?.headers ?? {}) },
+      ...init,
+    });
+  } catch {
+    throw new Error(
+      `No se pudo conectar con la API (${API_BASE}). Verifica VITE_API_BASE_URL y que el backend este activo con HTTPS.`,
+    );
+  }
   if (!response.ok) {
     const message = await response.text();
     throw new Error(message || "Error de API");
@@ -94,6 +102,14 @@ function App() {
 
   const selectedBoard = boards.find((b) => b.id === selectedBoardId);
   const selectedObject = objects.find((o) => o.id === selectedObjectId);
+
+  useEffect(() => {
+    if (window.location.protocol === "https:" && API_BASE.startsWith("http://")) {
+      setError(
+        `Configuracion invalida: el sitio usa HTTPS y la API esta en HTTP (${API_BASE}). Usa una URL HTTPS en VITE_API_BASE_URL.`,
+      );
+    }
+  }, []);
 
   useEffect(() => {
     void loadBoards();
@@ -174,53 +190,73 @@ function App() {
   }
 
   async function createBoard() {
-    await api<Board>("/boards", {
-      method: "POST",
-      body: JSON.stringify({ name: boardName.trim() || "Tablero" }),
-    });
-    await loadBoards();
+    try {
+      await api<Board>("/boards", {
+        method: "POST",
+        body: JSON.stringify({ name: boardName.trim() || "Tablero" }),
+      });
+      await loadBoards();
+    } catch (err) {
+      setError(String(err));
+    }
   }
 
   async function renameBoard() {
     if (!selectedBoardId) return;
-    await api<Board>(`/boards/${selectedBoardId}`, {
-      method: "PATCH",
-      body: JSON.stringify({ name: boardName.trim() || "Tablero" }),
-    });
-    await loadBoards();
+    try {
+      await api<Board>(`/boards/${selectedBoardId}`, {
+        method: "PATCH",
+        body: JSON.stringify({ name: boardName.trim() || "Tablero" }),
+      });
+      await loadBoards();
+    } catch (err) {
+      setError(String(err));
+    }
   }
 
   async function deleteBoard() {
     if (!selectedBoardId) return;
-    await api<void>(`/boards/${selectedBoardId}`, { method: "DELETE" });
-    setObjects([]);
-    setSelectedObjectId("");
-    await loadBoards();
+    try {
+      await api<void>(`/boards/${selectedBoardId}`, { method: "DELETE" });
+      setObjects([]);
+      setSelectedObjectId("");
+      await loadBoards();
+    } catch (err) {
+      setError(String(err));
+    }
   }
 
   async function saveObject() {
     if (!selectedBoardId) return;
     const payload = { ...form };
 
-    if (selectedObjectId) {
-      await api<GameObject>(`/objects/${selectedObjectId}`, {
-        method: "PATCH",
-        body: JSON.stringify(payload),
-      });
-    } else {
-      await api<GameObject>(`/boards/${selectedBoardId}/objects`, {
-        method: "POST",
-        body: JSON.stringify(payload),
-      });
+    try {
+      if (selectedObjectId) {
+        await api<GameObject>(`/objects/${selectedObjectId}`, {
+          method: "PATCH",
+          body: JSON.stringify(payload),
+        });
+      } else {
+        await api<GameObject>(`/boards/${selectedBoardId}/objects`, {
+          method: "POST",
+          body: JSON.stringify(payload),
+        });
+      }
+      await loadObjects(selectedBoardId);
+    } catch (err) {
+      setError(String(err));
     }
-    await loadObjects(selectedBoardId);
   }
 
   async function removeObject() {
     if (!selectedObjectId || !selectedBoardId) return;
-    await api<void>(`/objects/${selectedObjectId}`, { method: "DELETE" });
-    setSelectedObjectId("");
-    await loadObjects(selectedBoardId);
+    try {
+      await api<void>(`/objects/${selectedObjectId}`, { method: "DELETE" });
+      setSelectedObjectId("");
+      await loadObjects(selectedBoardId);
+    } catch (err) {
+      setError(String(err));
+    }
   }
 
   async function moveSelectedObject(x: number, y: number) {
