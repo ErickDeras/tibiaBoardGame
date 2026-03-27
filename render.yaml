@@ -1,9 +1,8 @@
 services:
   - type: static
     name: tibia-boardgame-frontend
-    rootDir: frontend
     buildCommand: npm run render:build
-    publishPath: dist
+    publishPath: frontend/dist
     envVars:
       - key: VITE_API_BASE_URL
         sync: false

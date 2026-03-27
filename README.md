@@ -169,3 +169,7 @@ Este repo incluye `render.yaml` para crear un **Static Site** en Render usando `
 
 - Este despliegue es **solo frontend estatico**.
 - El backend debe estar desplegado aparte (Render Web Service u otro proveedor) y permitir CORS desde el dominio del frontend.
+
+Guia detallada:
+
+- `RENDER_STATIC_SITE.md`

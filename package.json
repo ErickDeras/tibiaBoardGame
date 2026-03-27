@@ -1,0 +1,8 @@
+{
+  "name": "tibia-boardgame-monorepo",
+  "private": true,
+  "scripts": {
+    "render:build": "npm --prefix frontend ci && npm --prefix frontend run build",
+    "redenr:build": "npm run render:build"
+  }
+}
