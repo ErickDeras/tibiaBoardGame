@@ -16,6 +16,8 @@ const deckCategoryValues = [
   "ITEM_DEFENSIVE",
   "ITEM_HEALING",
 ] as const;
+
+const spellDamageSkillValues = ["SWORD", "AXE", "MACE", "SHIELD", "DISTANCE"] as const;
 const equipmentSlots = [
   "Helmet",
   "Armor",
@@ -28,7 +30,8 @@ const equipmentSlots = [
   "Backpack",
 ] as const;
 
-const cardSchema = z.object({
+const cardFieldsSchema = z.object({
+  id: z.string().trim().min(1).optional(),
   name: z.string().trim().min(1),
   description: z.string().trim().default(""),
   deckCategory: z.enum(deckCategoryValues).default("SPELL_ATTACK"),
@@ -38,7 +41,29 @@ const cardSchema = z.object({
   rapidSpell: z.boolean().default(false),
   spellSkillBonus: z.number().int().min(0).default(0),
   critMultiplier: z.number().int().min(1).nullable().optional(),
+  damageSkill: z.enum(spellDamageSkillValues).nullable().optional(),
 });
+
+function refineCardDamageSkill(
+  card: z.infer<typeof cardFieldsSchema>,
+  ctx: z.RefinementCtx,
+) {
+  if (card.deckCategory === "SPELL_ATTACK" || card.deckCategory === "SPELL_DEFENSIVE") {
+    if (card.damageSkill == null) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: "SPELL_ATTACK y SPELL_DEFENSIVE requieren damageSkill",
+        path: ["damageSkill"],
+      });
+    }
+  }
+}
+
+export const cardSchema = cardFieldsSchema.superRefine(refineCardDamageSkill);
+
+const cardTemplateFieldsSchema = cardFieldsSchema.omit({ id: true });
+export const createCardTemplateSchema =
+  cardTemplateFieldsSchema.superRefine(refineCardDamageSkill);
 
 const inventorySlotSchema = z.object({
   id: z.string().trim().min(1).optional(),
@@ -104,7 +129,7 @@ export const createObjectSchema = z.object({
   staminaRegen: z.number().int().min(0).default(0),
   capacityMax: z.number().int().min(0).default(0),
   spriteUrl: z.string().trim().url().or(z.literal("")).default(""),
-  cards: z.array(cardSchema).length(5),
+  cards: z.array(cardSchema).max(5),
   inventorySlots: z.array(inventorySlotSchema).default([]),
 });
 
@@ -171,4 +196,11 @@ export const spawnCreatureSchema = z.object({
 
 export const collectLootSchema = z.object({
   collectorObjectId: z.string().trim().min(1),
+});
+
+/** PATCH: refinamiento de SPELL_ATTACK/DEFENSIVE se aplica al fusionar con la fila en la ruta. */
+export const updateCardTemplateSchema = cardTemplateFieldsSchema.partial();
+
+export const addCardFromTemplateSchema = z.object({
+  templateId: z.string().trim().min(1),
 });

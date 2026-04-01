@@ -16,6 +16,8 @@ export type DeckCategory =
   | "ITEM_DEFENSIVE"
   | "ITEM_HEALING";
 
+export type SpellDamageSkill = "SWORD" | "AXE" | "MACE" | "SHIELD" | "DISTANCE";
+
 export type Card = {
   id?: string;
   name: string;
@@ -27,6 +29,21 @@ export type Card = {
   rapidSpell: boolean;
   spellSkillBonus: number;
   critMultiplier: number | null;
+  damageSkill: SpellDamageSkill | null;
+};
+
+export type CardTemplate = {
+  id: string;
+  name: string;
+  description: string;
+  deckCategory: DeckCategory;
+  manaCost: number | null;
+  staminaCost: number | null;
+  capacityCost: number | null;
+  rapidSpell: boolean;
+  spellSkillBonus: number;
+  critMultiplier: number | null;
+  damageSkill: SpellDamageSkill | null;
 };
 
 export type InventorySlotRow = {

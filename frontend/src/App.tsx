@@ -4,6 +4,7 @@ import { api } from "./api";
 import { API_BASE, FIELD_BY_SLOT } from "./constants";
 import { BoardView } from "./components/BoardView";
 import { BestiaryPanel } from "./components/BestiaryPanel";
+import { CardTemplatesPanel } from "./components/CardTemplatesPanel";
 import { DungeonManager } from "./components/DungeonManager";
 import { EquipmentCatalog, emptyEquipmentForm } from "./components/EquipmentCatalog";
 import { ObjectEditor } from "./components/ObjectEditor";
@@ -22,6 +23,7 @@ import {
 import type {
   BaseStats,
   Board,
+  CardTemplate,
   CreatureTemplate,
   Dungeon,
   EquipmentValue,
@@ -56,20 +58,6 @@ function equipmentBonuses(items: EquipmentValue[]) {
       weight: 0,
     },
   );
-}
-
-function newCard(n: number) {
-  return {
-    name: `Carta ${n}`,
-    description: "",
-    deckCategory: "SPELL_ATTACK" as const,
-    manaCost: null as number | null,
-    staminaCost: null as number | null,
-    capacityCost: null as number | null,
-    rapidSpell: false,
-    spellSkillBonus: 0,
-    critMultiplier: null as number | null,
-  };
 }
 
 const emptyForm: ObjectForm = {
@@ -108,7 +96,7 @@ const emptyForm: ObjectForm = {
   capacityMax: 400,
   spriteUrl: "",
   inventorySlots: [],
-  cards: [newCard(1), newCard(2), newCard(3), newCard(4), newCard(5)],
+  cards: [],
 };
 
 function toSaveBody(form: ObjectForm) {
@@ -157,6 +145,7 @@ function toSaveBody(form: ObjectForm) {
       rapidSpell: c.rapidSpell,
       spellSkillBonus: c.spellSkillBonus,
       critMultiplier: c.critMultiplier,
+      damageSkill: c.damageSkill,
     })),
     inventorySlots:
       form.objectKind === "PLAYER"
@@ -196,6 +185,7 @@ function App() {
     capacityMax: 0,
   });
   const [templates, setTemplates] = useState<CreatureTemplate[]>([]);
+  const [cardTemplates, setCardTemplates] = useState<CardTemplate[]>([]);
   const [spawnTemplateId, setSpawnTemplateId] = useState("");
   const [spawnMode, setSpawnMode] = useState(false);
   const [lootBusy, setLootBusy] = useState(false);
@@ -216,6 +206,7 @@ function App() {
     void loadBoards();
     void loadDungeons();
     void loadTemplates();
+    void loadCardTemplates();
   }, []);
 
   useEffect(() => {
@@ -296,6 +287,7 @@ function App() {
               rapidSpell: c.rapidSpell,
               spellSkillBonus: c.spellSkillBonus,
               critMultiplier: c.critMultiplier,
+              damageSkill: c.damageSkill,
             })),
             inventorySlots: n.inventorySlots.map((s) => ({
               slotIndex: s.slotIndex,
@@ -528,6 +520,15 @@ function App() {
     try {
       const data = await api<CreatureTemplate[]>("/creature-templates");
       setTemplates(data);
+    } catch (err) {
+      setError(String(err));
+    }
+  }
+
+  async function loadCardTemplates() {
+    try {
+      const data = await api<CardTemplate[]>("/card-templates");
+      setCardTemplates(data);
     } catch (err) {
       setError(String(err));
     }
@@ -790,6 +791,14 @@ function App() {
           spawnMode={spawnMode}
           setSpawnMode={setSpawnMode}
         />
+
+        <CardTemplatesPanel
+          templates={cardTemplates}
+          onReload={async () => {
+            await loadCardTemplates();
+          }}
+          onError={setError}
+        />
       </aside>
 
       <section className="main">
@@ -821,9 +830,13 @@ function App() {
         onNew={() => setSelectedObjectId("")}
         onCollectLoot={(collectorId) => void collectLoot(collectorId)}
         lootBusy={lootBusy}
+        cardTemplates={cardTemplates}
+        onRefreshObjects={async () => {
+          if (selectedBoardId) await loadObjects(selectedBoardId);
+        }}
+        onError={setError}
       />
     </main>
   );
 }
-
 export default App;

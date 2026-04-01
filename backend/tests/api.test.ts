@@ -14,6 +14,7 @@ function cardStub(i: number) {
     rapidSpell: false,
     spellSkillBonus: 0,
     critMultiplier: null as number | null,
+    damageSkill: "SWORD" as const,
   };
 }
 
@@ -43,7 +44,7 @@ const baseObjectBody = {
   staminaRegen: 0,
   capacityMax: 500,
   inventorySlots: [] as { slotIndex: number; itemName: string; weight: number; quantity: number }[],
-  cards: Array.from({ length: 5 }).map((_, i) => cardStub(i)),
+  cards: [] as ReturnType<typeof cardStub>[],
 };
 
 /** Arma 10 atk, escudo 4 def (servidor recalcula PLAYER desde equipo + nivel). */
@@ -68,6 +69,7 @@ beforeEach(async () => {
   await prisma.dungeonBoard.deleteMany();
   await prisma.dungeon.deleteMany();
   await prisma.card.deleteMany();
+  await prisma.cardTemplate.deleteMany();
   await prisma.inventorySlot.deleteMany();
   await prisma.gameObject.deleteMany();
   await prisma.equipmentItem.deleteMany();
@@ -90,7 +92,7 @@ describe("board/object api", () => {
       });
 
     expect(objectRes.status).toBe(201);
-    expect(objectRes.body.cards).toHaveLength(5);
+    expect(objectRes.body.cards).toHaveLength(0);
     expect(objectRes.body.attackValue).toBe(10);
     expect(objectRes.body.defenseValue).toBe(4);
     expect(objectRes.body.magicAttackValue).toBe(0);
@@ -303,6 +305,7 @@ describe("spawn and loot", () => {
     expect(spawnRes.body.name).toBe("Orc");
     expect(spawnRes.body.x).toBe(2);
     expect(spawnRes.body.y).toBe(3);
+    expect(spawnRes.body.cards).toHaveLength(0);
   });
 
   it("collect-loot transfers items when capacity allows", async () => {
@@ -408,5 +411,51 @@ describe("spawn and loot", () => {
         ],
       });
     expect(syncRes.status).toBe(200);
+  });
+});
+
+describe("card templates and use", () => {
+  it("adds a card from template and using it spends mana and removes the card", async () => {
+    const boardRes = await request(app).post("/boards").send({ name: "Cards Board" });
+    await seedMeleeGear(boardRes.body.id);
+
+    const tplRes = await request(app).post("/card-templates").send({
+      name: "Slash",
+      description: "Test",
+      deckCategory: "SPELL_ATTACK",
+      damageSkill: "SWORD",
+      manaCost: 5,
+      staminaCost: 1,
+      spellSkillBonus: 3,
+    });
+    expect(tplRes.status).toBe(201);
+
+    const playerRes = await request(app).post(`/boards/${boardRes.body.id}/objects`).send({
+      x: 0,
+      y: 0,
+      name: "Hero",
+      ...baseObjectBody,
+      manaPoints: 20,
+      staminaPoints: 5,
+      swordSkill: 40,
+      cards: [],
+    });
+    expect(playerRes.status).toBe(201);
+
+    const addRes = await request(app)
+      .post(`/objects/${playerRes.body.id}/cards/from-template`)
+      .send({ templateId: tplRes.body.id });
+    expect(addRes.status).toBe(201);
+    expect(addRes.body.object.cards).toHaveLength(1);
+    const cardId = addRes.body.card.id;
+
+    const useRes = await request(app).post(`/objects/${playerRes.body.id}/cards/${cardId}/use`).send({});
+    expect(useRes.status).toBe(200);
+    expect(useRes.body.object.cards).toHaveLength(0);
+    expect(useRes.body.object.manaPoints).toBe(15);
+    expect(useRes.body.object.staminaPoints).toBe(4);
+    expect(useRes.body.used.effectivePower).toBe(43);
+    expect(useRes.body.used.manaSpent).toBe(5);
+    expect(useRes.body.used.staminaSpent).toBe(1);
   });
 });

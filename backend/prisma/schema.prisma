@@ -114,6 +114,23 @@ model Card {
   rapidSpell       Boolean  @default(false)
   spellSkillBonus  Int      @default(0)
   critMultiplier   Int?
+  damageSkill      SpellDamageSkill?
+}
+
+model CardTemplate {
+  id               String          @id @default(cuid())
+  name             String
+  description      String          @default("")
+  deckCategory     DeckCategory    @default(SPELL_ATTACK)
+  manaCost         Int?
+  staminaCost      Int?
+  capacityCost     Int?
+  rapidSpell       Boolean         @default(false)
+  spellSkillBonus  Int             @default(0)
+  critMultiplier   Int?
+  damageSkill      SpellDamageSkill?
+  createdAt        DateTime        @default(now())
+  updatedAt        DateTime        @updatedAt
 }
 
 model CreatureTemplate {
@@ -192,6 +209,14 @@ enum DeckCategory {
   ITEM_SUPPORT
   ITEM_DEFENSIVE
   ITEM_HEALING
+}
+
+enum SpellDamageSkill {
+  SWORD
+  AXE
+  MACE
+  SHIELD
+  DISTANCE
 }
 
 enum EquipmentSlot {
