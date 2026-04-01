@@ -231,6 +231,12 @@ function App() {
     objectsRef.current = objects;
   }, [objects]);
 
+  useEffect(() => {
+    if (selectedObjectId && !objects.some((o) => o.id === selectedObjectId)) {
+      setSelectedObjectId("");
+    }
+  }, [objects, selectedObjectId]);
+
   const combatActive = combatSession?.status === "ACTIVE";
 
   useEffect(() => {

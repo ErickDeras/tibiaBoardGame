@@ -29,6 +29,7 @@ const emptyTpl: Partial<CreatureTemplate> = {
   abilityName: "",
   abilityManaCost: 0,
   abilityAttackBonus: 0,
+  experiencePoints: 0,
 };
 
 export function BestiaryPanel({
@@ -70,6 +71,7 @@ export function BestiaryPanel({
       abilityName: t.abilityName ?? "",
       abilityManaCost: t.abilityManaCost ?? 0,
       abilityAttackBonus: t.abilityAttackBonus ?? 0,
+      experiencePoints: t.experiencePoints ?? 0,
     });
   }
 
@@ -92,6 +94,7 @@ export function BestiaryPanel({
         abilityName: form.abilityName ?? "",
         abilityManaCost: form.abilityManaCost ?? 0,
         abilityAttackBonus: form.abilityAttackBonus ?? 0,
+        experiencePoints: form.experiencePoints ?? 0,
       };
       if (editingId) {
         await api<CreatureTemplate>(`/creature-templates/${editingId}`, {
@@ -229,6 +232,15 @@ export function BestiaryPanel({
               min={0}
               value={form.defenseValue ?? 0}
               onChange={(e) => setForm((p) => ({ ...p, defenseValue: Number(e.target.value) }))}
+            />
+          </label>
+          <label>
+            XP al morir
+            <input
+              type="number"
+              min={0}
+              value={form.experiencePoints ?? 0}
+              onChange={(e) => setForm((p) => ({ ...p, experiencePoints: Number(e.target.value) }))}
             />
           </label>
         </div>

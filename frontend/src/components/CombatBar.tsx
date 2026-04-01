@@ -44,6 +44,7 @@ export function CombatBar({
   onError,
 }: Props) {
   const active = session?.status === "ACTIVE";
+  const combatEnded = session?.status === "ENDED";
   const current = objects.find((o) => o.id === session?.currentActorId);
   const currentName = current?.name ?? session?.currentActorId ?? "—";
 
@@ -108,10 +109,16 @@ export function CombatBar({
   return (
     <div className="combatBar block">
       <h3>Combate</h3>
+      {combatEnded ? (
+        <p className="hint">
+          Partida terminada. El tablero no se vacía: puedes recoger loot del suelo y revisar skills en el editor.
+          Cuando quieras otro combate, reinicia la partida.
+        </p>
+      ) : null}
       {!active ? (
         <div className="row">
           <button type="button" disabled={combatBusy} onClick={() => void onStart()}>
-            Iniciar partida
+            {combatEnded ? "Reiniciar partida" : "Iniciar partida"}
           </button>
         </div>
       ) : (
@@ -239,7 +246,7 @@ export function CombatBar({
           </button>
         </div>
       ) : null}
-      {selectedPlayer && active ? (
+      {selectedPlayer && (active || combatEnded) ? (
         <div className="row">
           <button
             type="button"

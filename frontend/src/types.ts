@@ -201,6 +201,7 @@ export type CreatureTemplate = {
   abilityName: string;
   abilityManaCost: number;
   abilityAttackBonus: number;
+  experiencePoints: number;
   lootEntries: LootEntry[];
 };
 
@@ -224,6 +225,7 @@ export type CombatSession = {
   pendingAddIds: unknown;
   currentActorId: string | null;
   actorTurnState: unknown;
+  initialAliveCreatureCount?: number;
   logEntries?: CombatLogEntry[];
 };
 

@@ -38,7 +38,7 @@ import {
   boardHasActiveCombat,
   collectGroundLoot,
   endCombatSession,
-  getActiveCombatSession,
+  getCombatSessionForBoard,
   pushPendingCombatant,
   runCreatureTurn,
   runPlayerTurn,
@@ -356,7 +356,7 @@ app.post("/boards/:boardId/spawn-creature", async (req, res) => {
 });
 
 app.get("/boards/:boardId/combat", async (req, res) => {
-  const session = await getActiveCombatSession(req.params.boardId);
+  const session = await getCombatSessionForBoard(req.params.boardId);
   res.json({ session });
 });
 
