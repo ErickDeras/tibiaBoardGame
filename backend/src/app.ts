@@ -2,7 +2,12 @@ import cors from "cors";
 import express from "express";
 import { Prisma } from "@prisma/client";
 import { prisma } from "./prisma.js";
-import { normalizeGameObjectCombatAndProgression } from "./services/combatStats.js";
+import {
+  normalizeGameObjectCombatAndProgression,
+  playerHpManaBonusPerLevel,
+  playerMagicLevelBonusPerStep,
+} from "./services/combatStats.js";
+import { experienceLevelFromTotalXp } from "./services/progression.js";
 import {
   collectLootSchema,
   createBoardSchema,
@@ -516,11 +521,20 @@ app.post("/boards/:id/sync", async (req, res) => {
         necklace: restIn.necklace,
         backpackEquipment: restIn.backpackEquipment,
         objectKind: restIn.objectKind,
+        profession: restIn.profession,
         experiencePoints: restIn.experiencePoints,
         experienceLevel: restIn.experienceLevel,
+        hitpoints: restIn.hitpoints,
+        manaPoints: restIn.manaPoints,
         attackValue: restIn.attackValue,
         defenseValue: restIn.defenseValue,
         magicAttackValue: restIn.magicAttackValue ?? 0,
+        swordSkill: restIn.swordSkill,
+        axeSkill: restIn.axeSkill,
+        maceSkill: restIn.maceSkill,
+        distanceSkill: restIn.distanceSkill,
+        shieldingSkill: restIn.shieldingSkill,
+        magicLevel: restIn.magicLevel,
       });
       const incomingRest = { ...restIn, ...norm };
 
@@ -671,11 +685,20 @@ app.post("/boards/:id/objects", async (req, res) => {
     necklace: rest.necklace,
     backpackEquipment: rest.backpackEquipment,
     objectKind: rest.objectKind,
+    profession: rest.profession,
     experiencePoints: rest.experiencePoints,
     experienceLevel: rest.experienceLevel,
+    hitpoints: rest.hitpoints,
+    manaPoints: rest.manaPoints,
     attackValue: rest.attackValue,
     defenseValue: rest.defenseValue,
     magicAttackValue: rest.magicAttackValue ?? 0,
+    swordSkill: rest.swordSkill,
+    axeSkill: rest.axeSkill,
+    maceSkill: rest.maceSkill,
+    distanceSkill: rest.distanceSkill,
+    shieldingSkill: rest.shieldingSkill,
+    magicLevel: rest.magicLevel,
   });
   const body = { ...rest, ...norm };
 
@@ -731,6 +754,27 @@ app.patch("/objects/:id", async (req, res) => {
         rest as Record<string, unknown>,
       ) as typeof existing;
 
+      const prevLevel = experienceLevelFromTotalXp(existing.experiencePoints);
+      const { hitpoints: hpPerLvPrev, manaPoints: mpPerLvPrev } = playerHpManaBonusPerLevel(
+        existing.profession,
+      );
+      const prevSteps = Math.max(0, prevLevel - 1);
+      let hpBase = merged.hitpoints;
+      let mpBase = merged.manaPoints;
+      let mlBase = merged.magicLevel;
+      if (merged.objectKind === "PLAYER") {
+        if (rest.hitpoints === undefined) {
+          hpBase = Math.max(0, merged.hitpoints - prevSteps * hpPerLvPrev);
+        }
+        if (rest.manaPoints === undefined) {
+          mpBase = Math.max(0, merged.manaPoints - prevSteps * mpPerLvPrev);
+        }
+        if (rest.magicLevel === undefined) {
+          const mlPerStepPrev = playerMagicLevelBonusPerStep(existing.profession);
+          mlBase = Math.max(0, merged.magicLevel - prevSteps * mlPerStepPrev);
+        }
+      }
+
       const norm = await normalizeGameObjectCombatAndProgression(tx, existing.boardId, {
         helmet: merged.helmet,
         armor: merged.armor,
@@ -742,11 +786,20 @@ app.patch("/objects/:id", async (req, res) => {
         necklace: merged.necklace,
         backpackEquipment: merged.backpackEquipment,
         objectKind: merged.objectKind,
+        profession: merged.profession,
         experiencePoints: merged.experiencePoints,
         experienceLevel: merged.experienceLevel,
+        hitpoints: hpBase,
+        manaPoints: mpBase,
         attackValue: merged.attackValue,
         defenseValue: merged.defenseValue,
         magicAttackValue: merged.magicAttackValue ?? 0,
+        swordSkill: merged.swordSkill,
+        axeSkill: merged.axeSkill,
+        maceSkill: merged.maceSkill,
+        distanceSkill: merged.distanceSkill,
+        shieldingSkill: merged.shieldingSkill,
+        magicLevel: mlBase,
       });
       const finalRow = { ...merged, ...norm };
 

@@ -8,6 +8,7 @@ import type {
   Profession,
 } from "../types";
 import { InventoryPanel } from "./InventoryPanel";
+import { experienceLevelFromTotalXp, playerHpManaBonusPerLevel } from "../model";
 
 type Props = {
   form: ObjectForm;
@@ -46,6 +47,21 @@ export function ObjectEditor({
     const first = playersOnBoard[0]?.id ?? "";
     setCollectorId((prev) => (prev && playersOnBoard.some((p) => p.id === prev) ? prev : first));
   }, [playersOnBoard]);
+
+  const playerExpLevel =
+    form.objectKind === "PLAYER" ? experienceLevelFromTotalXp(form.experiencePoints) : 1;
+  const vitalGain =
+    form.objectKind === "PLAYER" ? playerHpManaBonusPerLevel(form.profession) : { hitpoints: 0, manaPoints: 0 };
+  const vitalSteps =
+    form.objectKind === "PLAYER" ? Math.max(0, playerExpLevel - 1) : 0;
+  const displayHitpoints =
+    form.objectKind === "PLAYER"
+      ? form.hitpoints + vitalSteps * vitalGain.hitpoints
+      : form.hitpoints;
+  const displayManaPoints =
+    form.objectKind === "PLAYER"
+      ? form.manaPoints + vitalSteps * vitalGain.manaPoints
+      : form.manaPoints;
 
   return (
     <aside className="editor">
@@ -129,21 +145,39 @@ export function ObjectEditor({
 
         <div className="row3">
           <label>
-            HP
+            HP (total)
             <input
               type="number"
               min={0}
-              value={form.hitpoints}
-              onChange={(e) => setForm((prev) => ({ ...prev, hitpoints: Number(e.target.value) }))}
+              value={displayHitpoints}
+              onChange={(e) => {
+                const t = Number(e.target.value);
+                setForm((prev) => {
+                  if (prev.objectKind !== "PLAYER") return { ...prev, hitpoints: t };
+                  const L = experienceLevelFromTotalXp(prev.experiencePoints);
+                  const g = playerHpManaBonusPerLevel(prev.profession);
+                  const s = Math.max(0, L - 1);
+                  return { ...prev, hitpoints: Math.max(0, t - s * g.hitpoints) };
+                });
+              }}
             />
           </label>
           <label>
-            Mana
+            Mana (total)
             <input
               type="number"
               min={0}
-              value={form.manaPoints}
-              onChange={(e) => setForm((prev) => ({ ...prev, manaPoints: Number(e.target.value) }))}
+              value={displayManaPoints}
+              onChange={(e) => {
+                const t = Number(e.target.value);
+                setForm((prev) => {
+                  if (prev.objectKind !== "PLAYER") return { ...prev, manaPoints: t };
+                  const L = experienceLevelFromTotalXp(prev.experiencePoints);
+                  const g = playerHpManaBonusPerLevel(prev.profession);
+                  const s = Math.max(0, L - 1);
+                  return { ...prev, manaPoints: Math.max(0, t - s * g.manaPoints) };
+                });
+              }}
             />
           </label>
           <label>
@@ -218,32 +252,49 @@ export function ObjectEditor({
 
         <div className="row3">
           <label>
-            Base ataque
+            {form.objectKind === "PLAYER" ? "Ataque (total)" : "Base ataque"}
             <input
               type="number"
               min={0}
-              value={baseStats.attackValue}
+              readOnly={form.objectKind === "PLAYER"}
+              title={
+                form.objectKind === "PLAYER"
+                  ? "Equipo + skills + bono por nivel (segun XP). Se guarda al persistir."
+                  : undefined
+              }
+              value={form.objectKind === "PLAYER" ? form.attackValue : baseStats.attackValue}
               onChange={(e) =>
                 setBaseStats((prev) => ({ ...prev, attackValue: Number(e.target.value) }))
               }
             />
           </label>
           <label>
-            Base defensa
+            {form.objectKind === "PLAYER" ? "Defensa (total)" : "Base defensa"}
             <input
               type="number"
               min={0}
-              value={baseStats.defenseValue}
+              readOnly={form.objectKind === "PLAYER"}
+              title={
+                form.objectKind === "PLAYER"
+                  ? "Equipo + escudo (skill) + bono por nivel (segun XP)."
+                  : undefined
+              }
+              value={form.objectKind === "PLAYER" ? form.defenseValue : baseStats.defenseValue}
               onChange={(e) =>
                 setBaseStats((prev) => ({ ...prev, defenseValue: Number(e.target.value) }))
               }
             />
           </label>
           <label>
-            Base nivel magico
+            {form.objectKind === "PLAYER" ? "ML base (sin bono por nivel)" : "Base nivel magico"}
             <input
               type="number"
               min={0}
+              title={
+                form.objectKind === "PLAYER"
+                  ? "Base de personaje; los items de equipo suman en el total (Mag. atk) con el bono por nivel."
+                  : undefined
+              }
               value={baseStats.magicLevel}
               onChange={(e) =>
                 setBaseStats((prev) => ({ ...prev, magicLevel: Number(e.target.value) }))
@@ -251,6 +302,15 @@ export function ObjectEditor({
             />
           </label>
         </div>
+
+        {form.objectKind === "PLAYER" ? (
+          <div className="row3">
+            <label>
+              Mag. atk (total)
+              <input type="number" min={0} readOnly value={form.magicAttackValue} />
+            </label>
+          </div>
+        ) : null}
 
         <div className="row3">
           <label>

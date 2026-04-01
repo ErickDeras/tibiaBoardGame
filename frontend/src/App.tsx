@@ -7,7 +7,18 @@ import { BestiaryPanel } from "./components/BestiaryPanel";
 import { DungeonManager } from "./components/DungeonManager";
 import { EquipmentCatalog, emptyEquipmentForm } from "./components/EquipmentCatalog";
 import { ObjectEditor } from "./components/ObjectEditor";
-import { inventoryWeight, normalizeGameObject } from "./model";
+import {
+  experienceLevelFromTotalXp,
+  inventoryWeight,
+  normalizeGameObject,
+  playerAttackLevelBonusPerStep,
+  playerDefenseLevelBonusPerStep,
+  playerHitpointsManaBaseFromStored,
+  playerHpManaBonusPerLevel,
+  playerMagicLevelBonusPerStep,
+  shieldingDefensePointsFromSkill,
+  skillAttackPointsForProfession,
+} from "./model";
 import type {
   BaseStats,
   Board,
@@ -224,6 +235,21 @@ function App() {
       const payload: { objects: SyncObjectPayload[] } = {
         objects: objectsRef.current.map((obj) => {
           const n = normalizeGameObject(obj);
+          const steps = Math.max(0, n.experienceLevel - 1);
+          const vitalGain = playerHpManaBonusPerLevel(n.profession);
+          const hpBase =
+            n.objectKind === "PLAYER"
+              ? Math.max(0, n.hitpoints - steps * vitalGain.hitpoints)
+              : n.hitpoints;
+          const mpBase =
+            n.objectKind === "PLAYER"
+              ? Math.max(0, n.manaPoints - steps * vitalGain.manaPoints)
+              : n.manaPoints;
+          const mlPerStep = playerMagicLevelBonusPerStep(n.profession);
+          const mlBase =
+            n.objectKind === "PLAYER"
+              ? Math.max(0, n.magicLevel - steps * mlPerStep)
+              : n.magicLevel;
           return {
             id: n.id,
             x: n.x,
@@ -241,8 +267,8 @@ function App() {
             ring: n.ring,
             necklace: n.necklace,
             backpackEquipment: n.backpackEquipment,
-            hitpoints: n.hitpoints,
-            manaPoints: n.manaPoints,
+            hitpoints: hpBase,
+            manaPoints: mpBase,
             staminaPoints: n.staminaPoints,
             attackValue: n.attackValue,
             defenseValue: n.defenseValue,
@@ -252,7 +278,7 @@ function App() {
             maceSkill: n.maceSkill,
             distanceSkill: n.distanceSkill,
             shieldingSkill: n.shieldingSkill,
-            magicLevel: n.magicLevel,
+            magicLevel: mlBase,
             experiencePoints: n.experiencePoints,
             experienceLevel: n.experienceLevel,
             gold: n.gold,
@@ -301,6 +327,13 @@ function App() {
   useEffect(() => {
     if (selectedObject) {
       const o = normalizeGameObject(selectedObject);
+      const vitalsBase = playerHitpointsManaBaseFromStored(
+        o.objectKind,
+        o.profession,
+        o.experienceLevel,
+        o.hitpoints,
+        o.manaPoints,
+      );
       setForm({
         x: o.x,
         y: o.y,
@@ -317,8 +350,8 @@ function App() {
         ring: o.ring,
         necklace: o.necklace,
         backpackEquipment: o.backpackEquipment,
-        hitpoints: o.hitpoints,
-        manaPoints: o.manaPoints,
+        hitpoints: vitalsBase.hitpoints,
+        manaPoints: vitalsBase.manaPoints,
         staminaPoints: o.staminaPoints,
         attackValue: o.attackValue,
         defenseValue: o.defenseValue,
@@ -344,17 +377,33 @@ function App() {
         return o[field] === item.name;
       });
       const bonus = equipmentBonuses(selectedItems);
-      setBaseStats({
-        attackValue: o.attackValue - bonus.weaponAttack,
-        defenseValue: o.defenseValue - bonus.defenseValue,
-        swordSkill: o.swordSkill - bonus.swordSkill,
-        axeSkill: o.axeSkill - bonus.axeSkill,
-        maceSkill: o.maceSkill - bonus.maceSkill,
-        distanceSkill: o.distanceSkill - bonus.distanceSkill,
-        shieldingSkill: o.shieldingSkill - bonus.shieldingSkill,
-        magicLevel: o.magicLevel - bonus.magicLevel,
-        capacityMax: o.capacityMax + bonus.weight,
-      });
+      const lvSteps = o.objectKind === "PLAYER" ? Math.max(0, o.experienceLevel - 1) : 0;
+      const mlLv = lvSteps * playerMagicLevelBonusPerStep(o.profession);
+      if (o.objectKind === "PLAYER") {
+        setBaseStats({
+          attackValue: 0,
+          defenseValue: 0,
+          swordSkill: o.swordSkill - bonus.swordSkill,
+          axeSkill: o.axeSkill - bonus.axeSkill,
+          maceSkill: o.maceSkill - bonus.maceSkill,
+          distanceSkill: o.distanceSkill - bonus.distanceSkill,
+          shieldingSkill: o.shieldingSkill - bonus.shieldingSkill,
+          magicLevel: o.magicLevel - bonus.magicLevel - mlLv,
+          capacityMax: o.capacityMax + bonus.weight,
+        });
+      } else {
+        setBaseStats({
+          attackValue: o.attackValue - bonus.weaponAttack,
+          defenseValue: o.defenseValue - bonus.defenseValue,
+          swordSkill: o.swordSkill - bonus.swordSkill,
+          axeSkill: o.axeSkill - bonus.axeSkill,
+          maceSkill: o.maceSkill - bonus.maceSkill,
+          distanceSkill: o.distanceSkill - bonus.distanceSkill,
+          shieldingSkill: o.shieldingSkill - bonus.shieldingSkill,
+          magicLevel: o.magicLevel - bonus.magicLevel,
+          capacityMax: o.capacityMax + bonus.weight,
+        });
+      }
     } else {
       setForm(emptyForm);
       setBaseStats({
@@ -378,16 +427,54 @@ function App() {
     });
     const bonus = equipmentBonuses(selectedItems);
 
+    const L = experienceLevelFromTotalXp(form.experiencePoints);
+    const steps = form.objectKind === "PLAYER" ? Math.max(0, L - 1) : 0;
+    const atkStep = playerAttackLevelBonusPerStep(form.profession);
+    const defStep = playerDefenseLevelBonusPerStep(form.profession);
+    const mlStep = playerMagicLevelBonusPerStep(form.profession);
+
     setForm((prev) => {
+      let nextAttack: number;
+      let nextDefense: number;
+      let nextMagicLevel: number;
+      let nextMagicAttack: number;
+
+      if (prev.objectKind === "PLAYER") {
+        const charMagicBase = baseStats.magicLevel + bonus.magicLevel;
+        const swordT = baseStats.swordSkill + bonus.swordSkill;
+        const axeT = baseStats.axeSkill + bonus.axeSkill;
+        const maceT = baseStats.maceSkill + bonus.maceSkill;
+        const distT = baseStats.distanceSkill + bonus.distanceSkill;
+        const shieldT = baseStats.shieldingSkill + bonus.shieldingSkill;
+        const atkFromSkills = skillAttackPointsForProfession(prev.profession, {
+          swordSkill: swordT,
+          axeSkill: axeT,
+          maceSkill: maceT,
+          distanceSkill: distT,
+          magicBase: charMagicBase,
+        });
+        const shieldPts = shieldingDefensePointsFromSkill(shieldT);
+        nextAttack = atkFromSkills + bonus.weaponAttack + steps * atkStep;
+        nextDefense = bonus.defenseValue + shieldPts + steps * defStep;
+        nextMagicLevel = charMagicBase + steps * mlStep;
+        nextMagicAttack = nextMagicLevel;
+      } else {
+        nextAttack = baseStats.attackValue + bonus.weaponAttack;
+        nextDefense = baseStats.defenseValue + bonus.defenseValue;
+        nextMagicLevel = baseStats.magicLevel + bonus.magicLevel;
+        nextMagicAttack = prev.magicAttackValue;
+      }
+
       const next = {
-        attackValue: baseStats.attackValue + bonus.weaponAttack,
-        defenseValue: baseStats.defenseValue + bonus.defenseValue,
+        attackValue: nextAttack,
+        defenseValue: nextDefense,
         swordSkill: baseStats.swordSkill + bonus.swordSkill,
         axeSkill: baseStats.axeSkill + bonus.axeSkill,
         maceSkill: baseStats.maceSkill + bonus.maceSkill,
         distanceSkill: baseStats.distanceSkill + bonus.distanceSkill,
         shieldingSkill: baseStats.shieldingSkill + bonus.shieldingSkill,
-        magicLevel: baseStats.magicLevel + bonus.magicLevel,
+        magicLevel: nextMagicLevel,
+        magicAttackValue: nextMagicAttack,
         capacityMax: Math.max(0, baseStats.capacityMax - bonus.weight),
       };
       if (
@@ -399,6 +486,7 @@ function App() {
         prev.distanceSkill === next.distanceSkill &&
         prev.shieldingSkill === next.shieldingSkill &&
         prev.magicLevel === next.magicLevel &&
+        prev.magicAttackValue === next.magicAttackValue &&
         prev.capacityMax === next.capacityMax
       ) {
         return prev;
@@ -416,6 +504,14 @@ function App() {
     form.necklace,
     form.ring,
     form.backpackEquipment,
+    form.experiencePoints,
+    form.profession,
+    form.objectKind,
+    form.swordSkill,
+    form.axeSkill,
+    form.maceSkill,
+    form.distanceSkill,
+    form.shieldingSkill,
     baseStats,
   ]);
 
@@ -521,6 +617,14 @@ function App() {
   async function saveObject() {
     if (!selectedBoardId) return;
     const payload = toSaveBody(form);
+    if (form.objectKind === "PLAYER") {
+      const selectedItems = equipmentItems.filter((item) => {
+        const field = FIELD_BY_SLOT[item.slot];
+        return form[field] === item.name;
+      });
+      const bonus = equipmentBonuses(selectedItems);
+      payload.magicLevel = baseStats.magicLevel + bonus.magicLevel;
+    }
 
     try {
       if (selectedObjectId) {
