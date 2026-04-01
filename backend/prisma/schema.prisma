@@ -38,8 +38,65 @@ model Board {
   objects        GameObject[]
   equipmentItems EquipmentItem[]
   dungeonLink    DungeonBoard?
+  combatSession  CombatSession?
+  groundLoots    GroundLoot[]
   createdAt      DateTime        @default(now())
   updatedAt      DateTime        @updatedAt
+}
+
+model CombatSession {
+  id             String               @id @default(cuid())
+  boardId        String               @unique
+  board          Board                @relation(fields: [boardId], references: [id], onDelete: Cascade)
+  status         CombatSessionStatus  @default(ACTIVE)
+  startedAt      DateTime             @default(now())
+  endedAt        DateTime?
+  turnOrder      Json                 @default("[]")
+  turnIndex      Int                  @default(0)
+  generation     Int                  @default(0)
+  pendingAddIds  Json                 @default("[]")
+  currentActorId String?
+  actorTurnState Json?
+  logEntries     CombatLogEntry[]
+
+  @@index([boardId])
+}
+
+model CombatLogEntry {
+  id        String          @id @default(cuid())
+  sessionId String
+  session   CombatSession   @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  createdAt DateTime        @default(now())
+  type      String
+  payload   Json
+
+  @@index([sessionId, createdAt])
+}
+
+model ItemTemplate {
+  id          String      @id @default(cuid())
+  name        String
+  description String      @default("")
+  weight      Int         @default(0)
+  createdAt   DateTime    @default(now())
+  updatedAt   DateTime    @updatedAt
+  lootEntries LootEntry[]
+  groundLoots GroundLoot[]
+}
+
+model GroundLoot {
+  id               String        @id @default(cuid())
+  boardId          String
+  board            Board         @relation(fields: [boardId], references: [id], onDelete: Cascade)
+  x                Int
+  y                Int
+  itemName         String
+  weight           Int           @default(0)
+  quantity         Int           @default(1)
+  itemTemplateId   String?
+  itemTemplate     ItemTemplate? @relation(fields: [itemTemplateId], references: [id], onDelete: SetNull)
+
+  @@index([boardId, x, y])
 }
 
 model GameObject {
@@ -114,6 +171,23 @@ model Card {
   rapidSpell       Boolean  @default(false)
   spellSkillBonus  Int      @default(0)
   critMultiplier   Int?
+  damageSkill      SpellDamageSkill?
+}
+
+model CardTemplate {
+  id               String          @id @default(cuid())
+  name             String
+  description      String          @default("")
+  deckCategory     DeckCategory    @default(SPELL_ATTACK)
+  manaCost         Int?
+  staminaCost      Int?
+  capacityCost     Int?
+  rapidSpell       Boolean         @default(false)
+  spellSkillBonus  Int             @default(0)
+  critMultiplier   Int?
+  damageSkill      SpellDamageSkill?
+  createdAt        DateTime        @default(now())
+  updatedAt        DateTime        @updatedAt
 }
 
 model CreatureTemplate {
@@ -130,9 +204,12 @@ model CreatureTemplate {
   maceSkill      Int         @default(0)
   distanceSkill  Int         @default(0)
   shieldingSkill Int         @default(0)
-  magicLevel     Int         @default(0)
-  lootEntries    LootEntry[]
-  instances      GameObject[]
+  magicLevel         Int         @default(0)
+  abilityName        String      @default("")
+  abilityManaCost    Int         @default(0)
+  abilityAttackBonus Int         @default(0)
+  lootEntries        LootEntry[]
+  instances          GameObject[]
   createdAt      DateTime    @default(now())
   updatedAt      DateTime    @updatedAt
 }
@@ -144,6 +221,8 @@ model LootEntry {
   itemName           String
   weight             Int              @default(0)
   quantity           Int              @default(1)
+  itemTemplateId     String?
+  itemTemplate       ItemTemplate?    @relation(fields: [itemTemplateId], references: [id], onDelete: SetNull)
 }
 
 model EquipmentItem {
@@ -194,6 +273,14 @@ enum DeckCategory {
   ITEM_HEALING
 }
 
+enum SpellDamageSkill {
+  SWORD
+  AXE
+  MACE
+  SHIELD
+  DISTANCE
+}
+
 enum EquipmentSlot {
   Helmet
   Armor
@@ -204,4 +291,9 @@ enum EquipmentSlot {
   Necklace
   Ring
   Backpack
+}
+
+enum CombatSessionStatus {
+  ACTIVE
+  ENDED
 }

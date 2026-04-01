@@ -16,6 +16,8 @@ export type DeckCategory =
   | "ITEM_DEFENSIVE"
   | "ITEM_HEALING";
 
+export type SpellDamageSkill = "SWORD" | "AXE" | "MACE" | "SHIELD" | "DISTANCE";
+
 export type Card = {
   id?: string;
   name: string;
@@ -27,6 +29,21 @@ export type Card = {
   rapidSpell: boolean;
   spellSkillBonus: number;
   critMultiplier: number | null;
+  damageSkill: SpellDamageSkill | null;
+};
+
+export type CardTemplate = {
+  id: string;
+  name: string;
+  description: string;
+  deckCategory: DeckCategory;
+  manaCost: number | null;
+  staminaCost: number | null;
+  capacityCost: number | null;
+  rapidSpell: boolean;
+  spellSkillBonus: number;
+  critMultiplier: number | null;
+  damageSkill: SpellDamageSkill | null;
 };
 
 export type InventorySlotRow = {
@@ -84,6 +101,8 @@ export type GameObject = {
   spriteUrl: string;
   cards: Card[];
   inventorySlots: InventorySlotRow[];
+  /** Piso de mazmorra (1–4) si el tablero está enlazado; si no, null */
+  floor?: number | null;
 };
 
 export type ObjectForm = Omit<GameObject, "id" | "boardId">;
@@ -161,6 +180,7 @@ export type LootEntry = {
   itemName: string;
   weight: number;
   quantity: number;
+  itemTemplateId?: string | null;
 };
 
 export type CreatureTemplate = {
@@ -178,5 +198,49 @@ export type CreatureTemplate = {
   distanceSkill: number;
   shieldingSkill: number;
   magicLevel: number;
+  abilityName: string;
+  abilityManaCost: number;
+  abilityAttackBonus: number;
   lootEntries: LootEntry[];
+};
+
+export type CombatLogEntry = {
+  id: string;
+  sessionId: string;
+  createdAt: string;
+  type: string;
+  payload: Record<string, unknown>;
+};
+
+export type CombatSession = {
+  id: string;
+  boardId: string;
+  status: "ACTIVE" | "ENDED";
+  startedAt: string;
+  endedAt: string | null;
+  turnOrder: unknown;
+  turnIndex: number;
+  generation: number;
+  pendingAddIds: unknown;
+  currentActorId: string | null;
+  actorTurnState: unknown;
+  logEntries?: CombatLogEntry[];
+};
+
+export type GroundLoot = {
+  id: string;
+  boardId: string;
+  x: number;
+  y: number;
+  itemName: string;
+  weight: number;
+  quantity: number;
+  itemTemplateId: string | null;
+};
+
+export type ItemTemplate = {
+  id: string;
+  name: string;
+  description: string;
+  weight: number;
 };

@@ -1,13 +1,15 @@
 import { useEffect, useState } from "react";
-import { DECK_CATEGORIES, EQUIPMENT_SLOTS, FIELD_BY_SLOT } from "../constants";
+import { EQUIPMENT_SLOTS, FIELD_BY_SLOT } from "../constants";
 import type {
   BaseStats,
+  CardTemplate,
   EquipmentValue,
   GameObject,
   ObjectForm,
   Profession,
 } from "../types";
 import { InventoryPanel } from "./InventoryPanel";
+import { PlayerCardDeck } from "./PlayerCardDeck";
 import { experienceLevelFromTotalXp, playerHpManaBonusPerLevel } from "../model";
 
 type Props = {
@@ -24,6 +26,10 @@ type Props = {
   onNew: () => void;
   onCollectLoot: (collectorObjectId: string) => void;
   lootBusy: boolean;
+  cardTemplates: CardTemplate[];
+  onRefreshObjects: () => Promise<void>;
+  onError: (msg: string) => void;
+  combatLocked?: boolean;
 };
 
 export function ObjectEditor({
@@ -40,6 +46,10 @@ export function ObjectEditor({
   onNew,
   onCollectLoot,
   lootBusy,
+  cardTemplates,
+  onRefreshObjects,
+  onError,
+  combatLocked = false,
 }: Props) {
   const [collectorId, setCollectorId] = useState("");
 
@@ -66,7 +76,10 @@ export function ObjectEditor({
   return (
     <aside className="editor">
       <h2>{selectedObjectId ? "Editar objeto" : "Crear objeto"}</h2>
-      <div className="form">
+      {combatLocked ? (
+        <p className="hint">Partida activa: edicion de objetos deshabilitada.</p>
+      ) : null}
+      <fieldset className="form" disabled={combatLocked}>
         <label>
           Nombre
           <input
@@ -455,160 +468,16 @@ export function ObjectEditor({
           </div>
         )}
 
-        <h3>Cartas (5)</h3>
-        {form.cards.map((card, idx) => (
-          <div className="cardRow" key={idx}>
-            <input
-              placeholder={`Carta ${idx + 1} nombre`}
-              value={card.name}
-              onChange={(e) =>
-                setForm((prev) => ({
-                  ...prev,
-                  cards: prev.cards.map((c, i) => (i === idx ? { ...c, name: e.target.value } : c)),
-                }))
-              }
-            />
-            <input
-              placeholder="Descripcion"
-              value={card.description}
-              onChange={(e) =>
-                setForm((prev) => ({
-                  ...prev,
-                  cards: prev.cards.map((c, i) =>
-                    i === idx ? { ...c, description: e.target.value } : c,
-                  ),
-                }))
-              }
-            />
-            <select
-              value={card.deckCategory}
-              onChange={(e) =>
-                setForm((prev) => ({
-                  ...prev,
-                  cards: prev.cards.map((c, i) =>
-                    i === idx ? { ...c, deckCategory: e.target.value as typeof c.deckCategory } : c,
-                  ),
-                }))
-              }
-            >
-              {DECK_CATEGORIES.map((dc) => (
-                <option key={dc} value={dc}>
-                  {dc}
-                </option>
-              ))}
-            </select>
-            <input
-              type="number"
-              min={0}
-              title="Mana"
-              placeholder="Mana"
-              value={card.manaCost ?? ""}
-              onChange={(e) =>
-                setForm((prev) => ({
-                  ...prev,
-                  cards: prev.cards.map((c, i) =>
-                    i === idx
-                      ? {
-                          ...c,
-                          manaCost: e.target.value === "" ? null : Number(e.target.value),
-                        }
-                      : c,
-                  ),
-                }))
-              }
-            />
-            <input
-              type="number"
-              min={0}
-              title="Stamina"
-              placeholder="Stam"
-              value={card.staminaCost ?? ""}
-              onChange={(e) =>
-                setForm((prev) => ({
-                  ...prev,
-                  cards: prev.cards.map((c, i) =>
-                    i === idx
-                      ? {
-                          ...c,
-                          staminaCost: e.target.value === "" ? null : Number(e.target.value),
-                        }
-                      : c,
-                  ),
-                }))
-              }
-            />
-            <input
-              type="number"
-              min={0}
-              title="Capacidad"
-              placeholder="Cap"
-              value={card.capacityCost ?? ""}
-              onChange={(e) =>
-                setForm((prev) => ({
-                  ...prev,
-                  cards: prev.cards.map((c, i) =>
-                    i === idx
-                      ? {
-                          ...c,
-                          capacityCost: e.target.value === "" ? null : Number(e.target.value),
-                        }
-                      : c,
-                  ),
-                }))
-              }
-            />
-            <label title="Healing rapid fuera de turno">
-              <input
-                type="checkbox"
-                checked={card.rapidSpell}
-                onChange={(e) =>
-                  setForm((prev) => ({
-                    ...prev,
-                    cards: prev.cards.map((c, i) =>
-                      i === idx ? { ...c, rapidSpell: e.target.checked } : c,
-                    ),
-                  }))
-                }
-              />
-              Rapid
-            </label>
-            <input
-              type="number"
-              min={0}
-              title="Bonus SP carta"
-              placeholder="+SP"
-              value={card.spellSkillBonus}
-              onChange={(e) =>
-                setForm((prev) => ({
-                  ...prev,
-                  cards: prev.cards.map((c, i) =>
-                    i === idx ? { ...c, spellSkillBonus: Number(e.target.value) } : c,
-                  ),
-                }))
-              }
-            />
-            <input
-              type="number"
-              min={1}
-              title="Crit mult (ej. 2 = x2)"
-              placeholder="Crit"
-              value={card.critMultiplier ?? ""}
-              onChange={(e) =>
-                setForm((prev) => ({
-                  ...prev,
-                  cards: prev.cards.map((c, i) =>
-                    i === idx
-                      ? {
-                          ...c,
-                          critMultiplier: e.target.value === "" ? null : Number(e.target.value),
-                        }
-                      : c,
-                  ),
-                }))
-              }
-            />
-          </div>
-        ))}
+        {form.objectKind === "PLAYER" && selectedObjectId ? (
+          <PlayerCardDeck
+            objectId={selectedObjectId}
+            form={form}
+            onFormPatched={(patch) => setForm((prev) => ({ ...prev, ...patch }))}
+            onRefreshObjects={onRefreshObjects}
+            onError={onError}
+            cardTemplates={cardTemplates}
+          />
+        ) : null}
 
         <div className="row">
           <button
@@ -631,7 +500,7 @@ export function ObjectEditor({
             <img src={form.spriteUrl} alt="preview" />
           </div>
         )}
-      </div>
+      </fieldset>
     </aside>
   );
 }

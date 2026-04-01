@@ -1,4 +1,11 @@
-import type { Card, DeckCategory, GameObject, InventorySlotRow, Profession } from "./types";
+import type {
+  Card,
+  DeckCategory,
+  GameObject,
+  InventorySlotRow,
+  Profession,
+  SpellDamageSkill,
+} from "./types";
 
 /** Misma fórmula que el backend (`progression.experienceLevelFromTotalXp`). */
 export function experienceLevelFromTotalXp(totalXp: number): number {
@@ -97,35 +104,48 @@ export function normalizeInventorySlots(slots: InventorySlotRow[] | undefined): 
   }));
 }
 
-export function normalizeCards(raw: Card[] | undefined): Card[] {
-  const base: Card[] =
-    raw?.map((c, i) => ({
-      id: c.id,
-      name: c.name || `Carta ${i + 1}`,
-      description: c.description ?? "",
-      deckCategory: (c.deckCategory ?? "SPELL_ATTACK") as DeckCategory,
-      manaCost: c.manaCost ?? null,
-      staminaCost: c.staminaCost ?? null,
-      capacityCost: c.capacityCost ?? null,
-      rapidSpell: c.rapidSpell ?? false,
-      spellSkillBonus: c.spellSkillBonus ?? 0,
-      critMultiplier: c.critMultiplier ?? null,
-    })) ?? [];
-  while (base.length < 5) {
-    const n = base.length + 1;
-    base.push({
-      name: `Carta ${n}`,
-      description: "",
-      deckCategory: "SPELL_ATTACK",
-      manaCost: null,
-      staminaCost: null,
-      capacityCost: null,
-      rapidSpell: false,
-      spellSkillBonus: 0,
-      critMultiplier: null,
-    });
+export function skillBaseFromDamageSkill(
+  o: {
+    swordSkill: number;
+    axeSkill: number;
+    maceSkill: number;
+    distanceSkill: number;
+    shieldingSkill: number;
+  },
+  s: SpellDamageSkill | null | undefined,
+): number {
+  if (s == null) return 0;
+  switch (s) {
+    case "SWORD":
+      return o.swordSkill;
+    case "AXE":
+      return o.axeSkill;
+    case "MACE":
+      return o.maceSkill;
+    case "SHIELD":
+      return o.shieldingSkill;
+    case "DISTANCE":
+      return o.distanceSkill;
+    default:
+      return 0;
   }
-  return base.slice(0, 5);
+}
+
+export function normalizeCards(raw: Card[] | undefined): Card[] {
+  if (!raw?.length) return [];
+  return raw.slice(0, 5).map((c, i) => ({
+    id: c.id,
+    name: c.name || `Carta ${i + 1}`,
+    description: c.description ?? "",
+    deckCategory: (c.deckCategory ?? "SPELL_ATTACK") as DeckCategory,
+    manaCost: c.manaCost ?? null,
+    staminaCost: c.staminaCost ?? null,
+    capacityCost: c.capacityCost ?? null,
+    rapidSpell: c.rapidSpell ?? false,
+    spellSkillBonus: c.spellSkillBonus ?? 0,
+    critMultiplier: c.critMultiplier ?? null,
+    damageSkill: c.damageSkill ?? null,
+  }));
 }
 
 export function normalizeGameObject(obj: GameObject): GameObject {
@@ -136,6 +156,7 @@ export function normalizeGameObject(obj: GameObject): GameObject {
     creatureTemplateId: obj.creatureTemplateId ?? null,
     backpackEquipment: obj.backpackEquipment ?? "",
     magicAttackValue: obj.magicAttackValue ?? 0,
+    floor: obj.floor ?? null,
     cards: normalizeCards(obj.cards),
     inventorySlots: normalizeInventorySlots(obj.inventorySlots),
   };

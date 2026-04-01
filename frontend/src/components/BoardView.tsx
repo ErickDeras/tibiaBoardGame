@@ -27,7 +27,10 @@ export function BoardView({ objects, selectedObjectId, selectedObject, onCellCli
             {obj ? (
               <div className="spriteWrap">
                 {obj.spriteUrl ? <img src={obj.spriteUrl} alt={obj.name} className="sprite" /> : "@"}
-                <small>{obj.name}</small>
+                <small>
+                  {obj.name}
+                  {obj.floor != null ? <span className="floorZ"> z{obj.floor}</span> : null}
+                </small>
               </div>
             ) : (
               <span className="coords">

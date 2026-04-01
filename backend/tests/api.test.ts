@@ -14,6 +14,7 @@ function cardStub(i: number) {
     rapidSpell: false,
     spellSkillBonus: 0,
     critMultiplier: null as number | null,
+    damageSkill: "SWORD" as const,
   };
 }
 
@@ -43,7 +44,7 @@ const baseObjectBody = {
   staminaRegen: 0,
   capacityMax: 500,
   inventorySlots: [] as { slotIndex: number; itemName: string; weight: number; quantity: number }[],
-  cards: Array.from({ length: 5 }).map((_, i) => cardStub(i)),
+  cards: [] as ReturnType<typeof cardStub>[],
 };
 
 /** Arma 10 atk, escudo 4 def (servidor recalcula PLAYER desde equipo + nivel). */
@@ -63,11 +64,16 @@ async function seedMeleeGear(boardId: string) {
 }
 
 beforeEach(async () => {
+  await prisma.combatLogEntry.deleteMany();
+  await prisma.combatSession.deleteMany();
+  await prisma.groundLoot.deleteMany();
   await prisma.lootEntry.deleteMany();
+  await prisma.itemTemplate.deleteMany();
   await prisma.creatureTemplate.deleteMany();
   await prisma.dungeonBoard.deleteMany();
   await prisma.dungeon.deleteMany();
   await prisma.card.deleteMany();
+  await prisma.cardTemplate.deleteMany();
   await prisma.inventorySlot.deleteMany();
   await prisma.gameObject.deleteMany();
   await prisma.equipmentItem.deleteMany();
@@ -90,7 +96,7 @@ describe("board/object api", () => {
       });
 
     expect(objectRes.status).toBe(201);
-    expect(objectRes.body.cards).toHaveLength(5);
+    expect(objectRes.body.cards).toHaveLength(0);
     expect(objectRes.body.attackValue).toBe(10);
     expect(objectRes.body.defenseValue).toBe(4);
     expect(objectRes.body.magicAttackValue).toBe(0);
@@ -303,6 +309,7 @@ describe("spawn and loot", () => {
     expect(spawnRes.body.name).toBe("Orc");
     expect(spawnRes.body.x).toBe(2);
     expect(spawnRes.body.y).toBe(3);
+    expect(spawnRes.body.cards).toHaveLength(0);
   });
 
   it("collect-loot transfers items when capacity allows", async () => {
@@ -408,5 +415,188 @@ describe("spawn and loot", () => {
         ],
       });
     expect(syncRes.status).toBe(200);
+  });
+});
+
+describe("card templates and use", () => {
+  it("adds a card from template and using it spends mana and removes the card", async () => {
+    const boardRes = await request(app).post("/boards").send({ name: "Cards Board" });
+    await seedMeleeGear(boardRes.body.id);
+
+    const tplRes = await request(app).post("/card-templates").send({
+      name: "Slash",
+      description: "Test",
+      deckCategory: "SPELL_ATTACK",
+      damageSkill: "SWORD",
+      manaCost: 5,
+      staminaCost: 1,
+      spellSkillBonus: 3,
+    });
+    expect(tplRes.status).toBe(201);
+
+    const playerRes = await request(app).post(`/boards/${boardRes.body.id}/objects`).send({
+      x: 0,
+      y: 0,
+      name: "Hero",
+      ...baseObjectBody,
+      manaPoints: 20,
+      staminaPoints: 5,
+      swordSkill: 40,
+      cards: [],
+    });
+    expect(playerRes.status).toBe(201);
+
+    const addRes = await request(app)
+      .post(`/objects/${playerRes.body.id}/cards/from-template`)
+      .send({ templateId: tplRes.body.id });
+    expect(addRes.status).toBe(201);
+    expect(addRes.body.object.cards).toHaveLength(1);
+    const cardId = addRes.body.card.id;
+
+    const useRes = await request(app).post(`/objects/${playerRes.body.id}/cards/${cardId}/use`).send({});
+    expect(useRes.status).toBe(200);
+    expect(useRes.body.object.cards).toHaveLength(0);
+    expect(useRes.body.object.manaPoints).toBe(15);
+    expect(useRes.body.object.staminaPoints).toBe(4);
+    expect(useRes.body.used.effectivePower).toBe(43);
+    expect(useRes.body.used.manaSpent).toBe(5);
+    expect(useRes.body.used.staminaSpent).toBe(1);
+  });
+});
+
+describe("combat", () => {
+  it("starts combat, player basic attack, creature counter; blocks patch and exploration move", async () => {
+    const boardRes = await request(app).post("/boards").send({ name: "Combat Board" });
+    await seedMeleeGear(boardRes.body.id);
+
+    const playerRes = await request(app).post(`/boards/${boardRes.body.id}/objects`).send({
+      x: 0,
+      y: 0,
+      name: "Hero",
+      ...baseObjectBody,
+    });
+    expect(playerRes.status).toBe(201);
+
+    const tpl = await request(app).post("/creature-templates").send({
+      name: "Rat",
+      hitpoints: 50,
+      defenseValue: 2,
+      attackValue: 5,
+    });
+    const spawn = await request(app).post(`/boards/${boardRes.body.id}/spawn-creature`).send({
+      templateId: tpl.body.id,
+      x: 1,
+      y: 0,
+    });
+    expect(spawn.status).toBe(201);
+
+    const start = await request(app).post(`/boards/${boardRes.body.id}/combat/start`).send({});
+    expect(start.status).toBe(201);
+
+    const patch = await request(app).patch(`/objects/${playerRes.body.id}`).send({ name: "Renamed" });
+    expect(patch.status).toBe(400);
+
+    const moveExpl = await request(app).post(`/objects/${playerRes.body.id}/move`).send({ x: 0, y: 1 });
+    expect(moveExpl.status).toBe(400);
+
+    const pTurn = await request(app).post(`/boards/${boardRes.body.id}/combat/turn/player`).send({
+      actorId: playerRes.body.id,
+      moves: [],
+      basicAttack: { kind: "melee", targetId: spawn.body.id },
+      cardAction: null,
+    });
+    expect(pTurn.status).toBe(200);
+    const ratAfter = pTurn.body.objects.find((o: { id: string }) => o.id === spawn.body.id);
+    expect(ratAfter.hitpoints).toBe(42);
+
+    const cTurn = await request(app).post(`/boards/${boardRes.body.id}/combat/turn/creature`).send({
+      actorId: spawn.body.id,
+    });
+    expect(cTurn.status).toBe(200);
+    const heroAfter = cTurn.body.objects.find((o: { id: string }) => o.id === playerRes.body.id);
+    expect(heroAfter.hitpoints).toBe(99);
+  });
+
+  it("can start combat again after ending previous session on same board", async () => {
+    const boardRes = await request(app).post("/boards").send({ name: "Restart Combat" });
+    await seedMeleeGear(boardRes.body.id);
+
+    const playerRes = await request(app).post(`/boards/${boardRes.body.id}/objects`).send({
+      x: 0,
+      y: 0,
+      name: "Hero",
+      ...baseObjectBody,
+    });
+    const tpl = await request(app).post("/creature-templates").send({
+      name: "RestartRat",
+      hitpoints: 10,
+      defenseValue: 0,
+      attackValue: 1,
+    });
+    await request(app).post(`/boards/${boardRes.body.id}/spawn-creature`).send({
+      templateId: tpl.body.id,
+      x: 1,
+      y: 0,
+    });
+
+    const first = await request(app).post(`/boards/${boardRes.body.id}/combat/start`).send({});
+    expect(first.status).toBe(201);
+
+    const end = await request(app).post(`/boards/${boardRes.body.id}/combat/end`).send({});
+    expect(end.status).toBe(200);
+
+    const second = await request(app).post(`/boards/${boardRes.body.id}/combat/start`).send({});
+    expect(second.status).toBe(201);
+    expect(second.body.boardId).toBe(boardRes.body.id);
+  });
+
+  it("drops ground loot when creature dies and player can collect", async () => {
+    const boardRes = await request(app).post("/boards").send({ name: "Loot Combat" });
+    await seedMeleeGear(boardRes.body.id);
+
+    const playerRes = await request(app).post(`/boards/${boardRes.body.id}/objects`).send({
+      x: 0,
+      y: 0,
+      name: "Hero",
+      ...baseObjectBody,
+    });
+
+    const tpl = await request(app).post("/creature-templates").send({
+      name: "LootRat",
+      hitpoints: 8,
+      defenseValue: 0,
+      attackValue: 1,
+    });
+    await request(app).post(`/creature-templates/${tpl.body.id}/loot`).send({
+      itemName: "Gold",
+      weight: 1,
+      quantity: 3,
+    });
+
+    const spawn = await request(app).post(`/boards/${boardRes.body.id}/spawn-creature`).send({
+      templateId: tpl.body.id,
+      x: 1,
+      y: 0,
+    });
+
+    await request(app).post(`/boards/${boardRes.body.id}/combat/start`).send({});
+
+    await request(app).post(`/boards/${boardRes.body.id}/combat/turn/player`).send({
+      actorId: playerRes.body.id,
+      moves: [],
+      basicAttack: { kind: "melee", targetId: spawn.body.id },
+      cardAction: null,
+    });
+
+    const gl = await request(app).get(`/boards/${boardRes.body.id}/ground-loot`);
+    expect(gl.status).toBe(200);
+    expect(gl.body.length).toBeGreaterThan(0);
+
+    const col = await request(app).post(`/objects/${playerRes.body.id}/collect-ground-loot`).send({
+      x: 1,
+      y: 0,
+    });
+    expect(col.status).toBe(200);
+    expect(col.body.player.inventorySlots.length).toBeGreaterThan(0);
   });
 });

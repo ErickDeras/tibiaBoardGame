@@ -18,6 +18,9 @@
 
 .main {
   padding: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 0;
 }
 
 .toolbar {
@@ -116,6 +119,154 @@ button {
   display: grid;
   grid-template-columns: 1fr 1fr;
   gap: 8px;
+}
+
+.muted {
+  color: #666;
+  font-size: 12px;
+}
+
+.hint {
+  font-size: 12px;
+  color: #555;
+  margin: 0 0 8px;
+}
+
+.playerDeck {
+  border-top: 1px solid #eee;
+  padding-top: 12px;
+  margin-top: 8px;
+}
+
+.deckAdd {
+  align-items: flex-end;
+  margin-bottom: 10px;
+}
+
+.cardCarousel {
+  display: flex;
+  gap: 12px;
+  overflow-x: auto;
+  scroll-snap-type: x mandatory;
+  padding-bottom: 8px;
+  scrollbar-gutter: stable;
+}
+
+.playCard {
+  flex: 0 0 220px;
+  scroll-snap-align: start;
+}
+
+.playCardInner {
+  border: 1px solid #c4b5fd;
+  border-radius: 10px;
+  padding: 10px;
+  background: linear-gradient(165deg, #faf5ff 0%, #f3e8ff 100%);
+  min-height: 200px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.06);
+}
+
+.playCardTitle {
+  font-weight: 700;
+  font-size: 15px;
+  color: #4c1d95;
+}
+
+.playCardCat {
+  font-size: 11px;
+  color: #6b21a8;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+}
+
+.playCardDesc {
+  font-size: 12px;
+  margin: 0;
+  color: #444;
+  flex: 1;
+}
+
+.playCardStats {
+  font-size: 12px;
+  color: #333;
+}
+
+.playCardCosts {
+  font-size: 12px;
+  color: #555;
+}
+
+.playCardUse {
+  margin-top: auto;
+}
+
+.useResult {
+  font-size: 12px;
+  color: #15803d;
+  margin-top: 8px;
+}
+
+.floorZ {
+  color: #7c3aed;
+  font-weight: 600;
+}
+
+.combatBar {
+  margin-top: 12px;
+  padding: 10px 12px;
+  background: #fafafa;
+  border: 1px solid #e5e5e5;
+  border-radius: 8px;
+}
+
+.combatLog {
+  margin-top: 8px;
+  padding: 10px 12px;
+  background: #1e1e1e;
+  color: #e4e4e7;
+  border-radius: 8px;
+  max-height: 240px;
+  display: flex;
+  flex-direction: column;
+}
+
+.combatLog h3 {
+  margin: 0 0 8px;
+  font-size: 14px;
+  color: #fafafa;
+}
+
+.combatLogScroll {
+  overflow-y: auto;
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: 12px;
+  line-height: 1.35;
+}
+
+.combatLogLine {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding-bottom: 6px;
+  border-bottom: 1px solid #3f3f46;
+}
+
+.combatLogLine time {
+  color: #a1a1aa;
+  font-size: 11px;
+}
+
+fieldset.form {
+  border: none;
+  margin: 0;
+  padding: 0;
+  min-width: 0;
 }
 
 .preview img {

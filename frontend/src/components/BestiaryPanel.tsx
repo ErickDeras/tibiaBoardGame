@@ -26,6 +26,9 @@ const emptyTpl: Partial<CreatureTemplate> = {
   distanceSkill: 0,
   shieldingSkill: 0,
   magicLevel: 0,
+  abilityName: "",
+  abilityManaCost: 0,
+  abilityAttackBonus: 0,
 };
 
 export function BestiaryPanel({
@@ -64,6 +67,9 @@ export function BestiaryPanel({
       distanceSkill: t.distanceSkill,
       shieldingSkill: t.shieldingSkill,
       magicLevel: t.magicLevel,
+      abilityName: t.abilityName ?? "",
+      abilityManaCost: t.abilityManaCost ?? 0,
+      abilityAttackBonus: t.abilityAttackBonus ?? 0,
     });
   }
 
@@ -83,6 +89,9 @@ export function BestiaryPanel({
         distanceSkill: form.distanceSkill ?? 0,
         shieldingSkill: form.shieldingSkill ?? 0,
         magicLevel: form.magicLevel ?? 0,
+        abilityName: form.abilityName ?? "",
+        abilityManaCost: form.abilityManaCost ?? 0,
+        abilityAttackBonus: form.abilityAttackBonus ?? 0,
       };
       if (editingId) {
         await api<CreatureTemplate>(`/creature-templates/${editingId}`, {
@@ -220,6 +229,33 @@ export function BestiaryPanel({
               min={0}
               value={form.defenseValue ?? 0}
               onChange={(e) => setForm((p) => ({ ...p, defenseValue: Number(e.target.value) }))}
+            />
+          </label>
+        </div>
+        <label>
+          Habilidad (nombre)
+          <input
+            value={form.abilityName ?? ""}
+            onChange={(e) => setForm((p) => ({ ...p, abilityName: e.target.value }))}
+          />
+        </label>
+        <div className="row3">
+          <label>
+            Mana habilidad
+            <input
+              type="number"
+              min={0}
+              value={form.abilityManaCost ?? 0}
+              onChange={(e) => setForm((p) => ({ ...p, abilityManaCost: Number(e.target.value) }))}
+            />
+          </label>
+          <label>
+            Bonus atk habilidad
+            <input
+              type="number"
+              min={0}
+              value={form.abilityAttackBonus ?? 0}
+              onChange={(e) => setForm((p) => ({ ...p, abilityAttackBonus: Number(e.target.value) }))}
             />
           </label>
         </div>

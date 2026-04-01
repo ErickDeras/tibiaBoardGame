@@ -1,4 +1,4 @@
-import type { DeckCategory, EquipmentField, EquipmentSlot } from "./types";
+import type { DeckCategory, EquipmentField, EquipmentSlot, SpellDamageSkill } from "./types";
 
 export const RAW_API_BASE =
   (import.meta.env.VITE_API_BASE_URL as string | undefined)?.trim() ||
@@ -42,4 +42,12 @@ export const DECK_CATEGORIES: DeckCategory[] = [
   "ITEM_SUPPORT",
   "ITEM_DEFENSIVE",
   "ITEM_HEALING",
+];
+
+export const SPELL_DAMAGE_SKILLS: SpellDamageSkill[] = [
+  "SWORD",
+  "AXE",
+  "MACE",
+  "SHIELD",
+  "DISTANCE",
 ];

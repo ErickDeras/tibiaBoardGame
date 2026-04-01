@@ -1,6 +1,6 @@
 import cors from "cors";
 import express from "express";
-import { Prisma } from "@prisma/client";
+import { Prisma, type SpellDamageSkill } from "@prisma/client";
 import { prisma } from "./prisma.js";
 import {
   normalizeGameObjectCombatAndProgression,
@@ -9,11 +9,17 @@ import {
 } from "./services/combatStats.js";
 import { experienceLevelFromTotalXp } from "./services/progression.js";
 import {
+  addCardFromTemplateSchema,
+  collectGroundLootSchema,
   collectLootSchema,
+  combatCreatureTurnSchema,
+  combatPlayerTurnSchema,
   createBoardSchema,
+  createCardTemplateSchema,
   createCreatureTemplateSchema,
   createDungeonSchema,
   createEquipmentItemSchema,
+  createItemTemplateSchema,
   createLootEntrySchema,
   createObjectSchema,
   moveObjectSchema,
@@ -21,11 +27,23 @@ import {
   spawnCreatureSchema,
   syncObjectsSchema,
   updateBoardSchema,
+  updateCardTemplateSchema,
   updateCreatureTemplateSchema,
   updateDungeonSchema,
   updateEquipmentItemSchema,
+  updateItemTemplateSchema,
   updateObjectSchema,
 } from "./validation.js";
+import {
+  boardHasActiveCombat,
+  collectGroundLoot,
+  endCombatSession,
+  getActiveCombatSession,
+  pushPendingCombatant,
+  runCreatureTurn,
+  runPlayerTurn,
+  startCombatSession,
+} from "./services/combatActions.js";
 
 export const app = express();
 
@@ -51,6 +69,7 @@ function cardToCreate(card: {
   rapidSpell?: boolean;
   spellSkillBonus?: number;
   critMultiplier?: number | null;
+  damageSkill?: string | null;
 }) {
   return {
     name: card.name,
@@ -62,7 +81,34 @@ function cardToCreate(card: {
     rapidSpell: card.rapidSpell ?? false,
     spellSkillBonus: card.spellSkillBonus ?? 0,
     critMultiplier: card.critMultiplier ?? null,
+    damageSkill: (card.damageSkill ?? null) as Prisma.CardCreateManyGameObjectInput["damageSkill"],
   };
+}
+
+function skillBaseForDamage(
+  o: {
+    swordSkill: number;
+    axeSkill: number;
+    maceSkill: number;
+    distanceSkill: number;
+    shieldingSkill: number;
+  },
+  s: SpellDamageSkill,
+): number {
+  switch (s) {
+    case "SWORD":
+      return o.swordSkill;
+    case "AXE":
+      return o.axeSkill;
+    case "MACE":
+      return o.maceSkill;
+    case "SHIELD":
+      return o.shieldingSkill;
+    case "DISTANCE":
+      return o.distanceSkill;
+    default:
+      return 0;
+  }
 }
 
 app.get("/health", (_req, res) => {
@@ -203,6 +249,54 @@ app.delete("/loot-entries/:id", async (req, res) => {
   }
 });
 
+app.get("/card-templates", async (_req, res) => {
+  const list = await prisma.cardTemplate.findMany({ orderBy: { name: "asc" } });
+  res.json(list);
+});
+
+app.post("/card-templates", async (req, res) => {
+  const parsed = createCardTemplateSchema.safeParse(req.body);
+  if (!parsed.success) return res.status(400).json(parsed.error.flatten());
+  const t = await prisma.cardTemplate.create({ data: parsed.data });
+  res.status(201).json(t);
+});
+
+app.patch("/card-templates/:id", async (req, res) => {
+  const parsed = updateCardTemplateSchema.safeParse(req.body);
+  if (!parsed.success) return res.status(400).json(parsed.error.flatten());
+  const existing = await prisma.cardTemplate.findUnique({ where: { id: req.params.id } });
+  if (!existing) return res.status(404).json({ message: "Plantilla no encontrada" });
+  const merged = {
+    name: parsed.data.name ?? existing.name,
+    description: parsed.data.description ?? existing.description,
+    deckCategory: parsed.data.deckCategory ?? existing.deckCategory,
+    manaCost: parsed.data.manaCost !== undefined ? parsed.data.manaCost : existing.manaCost,
+    staminaCost: parsed.data.staminaCost !== undefined ? parsed.data.staminaCost : existing.staminaCost,
+    capacityCost: parsed.data.capacityCost !== undefined ? parsed.data.capacityCost : existing.capacityCost,
+    rapidSpell: parsed.data.rapidSpell ?? existing.rapidSpell,
+    spellSkillBonus: parsed.data.spellSkillBonus ?? existing.spellSkillBonus,
+    critMultiplier: parsed.data.critMultiplier !== undefined ? parsed.data.critMultiplier : existing.critMultiplier,
+    damageSkill: parsed.data.damageSkill !== undefined ? parsed.data.damageSkill : existing.damageSkill,
+  };
+  const valid = createCardTemplateSchema.safeParse(merged);
+  if (!valid.success) return res.status(400).json(valid.error.flatten());
+  try {
+    const t = await prisma.cardTemplate.update({ where: { id: req.params.id }, data: parsed.data });
+    res.json(t);
+  } catch {
+    res.status(404).json({ message: "Plantilla no encontrada" });
+  }
+});
+
+app.delete("/card-templates/:id", async (req, res) => {
+  try {
+    await prisma.cardTemplate.delete({ where: { id: req.params.id } });
+    res.status(204).send();
+  } catch {
+    res.status(404).json({ message: "Plantilla no encontrada" });
+  }
+});
+
 app.post("/boards/:boardId/spawn-creature", async (req, res) => {
   const parsed = spawnCreatureSchema.safeParse(req.body);
   if (!parsed.success) return res.status(400).json(parsed.error.flatten());
@@ -217,15 +311,6 @@ app.post("/boards/:boardId/spawn-creature", async (req, res) => {
     where: { boardId: req.params.boardId, x: parsed.data.x, y: parsed.data.y },
   });
   if (occupied) return res.status(409).json({ message: "La celda ya esta ocupada" });
-
-  const emptyCards = Array.from({ length: 5 }).map((_, i) => ({
-    name: `Carta ${i + 1}`,
-    description: "",
-    deckCategory: "SPELL_ATTACK" as const,
-    manaCost: null as number | null,
-    staminaCost: null as number | null,
-    capacityCost: null as number | null,
-  }));
 
   try {
     const obj = await prisma.gameObject.create({
@@ -256,16 +341,104 @@ app.post("/boards/:boardId/spawn-creature", async (req, res) => {
         staminaRegen: 0,
         capacityMax: 0,
         spriteUrl: template.spriteUrl,
-        cards: { create: emptyCards.map(cardToCreate) },
+        cards: { create: [] },
       },
       include: { cards: true, inventorySlots: true },
     });
+    await pushPendingCombatant(req.params.boardId, obj.id);
     res.status(201).json(obj);
   } catch (error) {
     if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2002") {
       return res.status(409).json({ message: "La celda ya esta ocupada" });
     }
     throw error;
+  }
+});
+
+app.get("/boards/:boardId/combat", async (req, res) => {
+  const session = await getActiveCombatSession(req.params.boardId);
+  res.json({ session });
+});
+
+app.post("/boards/:boardId/combat/start", async (req, res) => {
+  const r = await startCombatSession(req.params.boardId);
+  if ("error" in r) return res.status(400).json({ message: r.error });
+  res.status(201).json(r.session);
+});
+
+app.post("/boards/:boardId/combat/end", async (req, res) => {
+  const r = await endCombatSession(req.params.boardId);
+  if ("error" in r) return res.status(400).json({ message: r.error });
+  res.json({ ok: true });
+});
+
+app.post("/boards/:boardId/combat/turn/player", async (req, res) => {
+  const parsed = combatPlayerTurnSchema.safeParse(req.body);
+  if (!parsed.success) return res.status(400).json(parsed.error.flatten());
+  const body = parsed.data;
+  const r = await runPlayerTurn(req.params.boardId, {
+    actorId: body.actorId,
+    moves: body.moves,
+    basicAttack: body.basicAttack ?? null,
+    cardAction: body.cardAction ?? null,
+  });
+  if ("error" in r) return res.status(400).json({ message: r.error });
+  res.json(r);
+});
+
+app.post("/boards/:boardId/combat/turn/creature", async (req, res) => {
+  const parsed = combatCreatureTurnSchema.safeParse(req.body);
+  if (!parsed.success) return res.status(400).json(parsed.error.flatten());
+  const r = await runCreatureTurn(req.params.boardId, parsed.data.actorId);
+  if ("error" in r) return res.status(400).json({ message: r.error });
+  res.json(r);
+});
+
+app.get("/boards/:boardId/ground-loot", async (req, res) => {
+  const rows = await prisma.groundLoot.findMany({
+    where: { boardId: req.params.boardId },
+    orderBy: [{ y: "asc" }, { x: "asc" }],
+  });
+  res.json(rows);
+});
+
+app.post("/objects/:id/collect-ground-loot", async (req, res) => {
+  const parsed = collectGroundLootSchema.safeParse(req.body);
+  if (!parsed.success) return res.status(400).json(parsed.error.flatten());
+  const r = await collectGroundLoot(req.params.id, parsed.data.x, parsed.data.y);
+  if ("error" in r) return res.status(400).json({ message: r.error });
+  res.json(r);
+});
+
+app.get("/item-templates", async (_req, res) => {
+  const list = await prisma.itemTemplate.findMany({ orderBy: { name: "asc" } });
+  res.json(list);
+});
+
+app.post("/item-templates", async (req, res) => {
+  const parsed = createItemTemplateSchema.safeParse(req.body);
+  if (!parsed.success) return res.status(400).json(parsed.error.flatten());
+  const t = await prisma.itemTemplate.create({ data: parsed.data });
+  res.status(201).json(t);
+});
+
+app.patch("/item-templates/:id", async (req, res) => {
+  const parsed = updateItemTemplateSchema.safeParse(req.body);
+  if (!parsed.success) return res.status(400).json(parsed.error.flatten());
+  try {
+    const t = await prisma.itemTemplate.update({ where: { id: req.params.id }, data: parsed.data });
+    res.json(t);
+  } catch {
+    res.status(404).json({ message: "Plantilla no encontrada" });
+  }
+});
+
+app.delete("/item-templates/:id", async (req, res) => {
+  try {
+    await prisma.itemTemplate.delete({ where: { id: req.params.id } });
+    res.status(204).send();
+  } catch {
+    res.status(404).json({ message: "Plantilla no encontrada" });
   }
 });
 
@@ -334,6 +507,120 @@ app.post("/objects/:id/collect-loot", async (req, res) => {
   res.json({ added: created, collector: updated });
 });
 
+app.post("/objects/:objectId/cards/from-template", async (req, res) => {
+  const parsed = addCardFromTemplateSchema.safeParse(req.body);
+  if (!parsed.success) return res.status(400).json(parsed.error.flatten());
+
+  const obj = await prisma.gameObject.findUnique({
+    where: { id: req.params.objectId },
+    include: { cards: true },
+  });
+  if (!obj) return res.status(404).json({ message: "Objeto no encontrado" });
+  if (obj.objectKind !== "PLAYER") {
+    return res.status(400).json({ message: "Solo los jugadores tienen mazo de cartas" });
+  }
+  if (obj.cards.length >= 5) {
+    return res.status(400).json({ message: "Máximo 5 cartas por jugador" });
+  }
+
+  const template = await prisma.cardTemplate.findUnique({ where: { id: parsed.data.templateId } });
+  if (!template) return res.status(404).json({ message: "Plantilla no encontrada" });
+
+  const created = await prisma.card.create({
+    data: {
+      gameObjectId: obj.id,
+      name: template.name,
+      description: template.description,
+      deckCategory: template.deckCategory,
+      manaCost: template.manaCost,
+      staminaCost: template.staminaCost,
+      capacityCost: template.capacityCost,
+      rapidSpell: template.rapidSpell,
+      spellSkillBonus: template.spellSkillBonus,
+      critMultiplier: template.critMultiplier,
+      damageSkill: template.damageSkill,
+    },
+  });
+
+  const full = await prisma.gameObject.findUnique({
+    where: { id: obj.id },
+    include: { cards: true, inventorySlots: true },
+  });
+  res.status(201).json({ card: created, object: full });
+});
+
+app.post("/objects/:objectId/cards/:cardId/use", async (req, res) => {
+  const objectId = req.params.objectId;
+  const cardId = req.params.cardId;
+
+  const obj = await prisma.gameObject.findUnique({
+    where: { id: objectId },
+    include: { cards: true, inventorySlots: true },
+  });
+  if (!obj) return res.status(404).json({ message: "Objeto no encontrado" });
+  if (obj.objectKind !== "PLAYER") {
+    return res.status(400).json({ message: "Solo los jugadores pueden usar cartas" });
+  }
+
+  const card = obj.cards.find((c) => c.id === cardId);
+  if (!card) return res.status(404).json({ message: "Carta no encontrada" });
+
+  const manaNeed = card.manaCost ?? 0;
+  const staminaNeed = card.staminaCost ?? 0;
+  const capNeed = card.capacityCost ?? 0;
+  const usedWeight = obj.inventorySlots.reduce((s, sl) => s + sl.weight * sl.quantity, 0);
+  const freeCap = obj.capacityMax - usedWeight;
+
+  if (obj.manaPoints < manaNeed) {
+    return res.status(400).json({ message: "Mana insuficiente", need: manaNeed, have: obj.manaPoints });
+  }
+  if (obj.staminaPoints < staminaNeed) {
+    return res.status(400).json({
+      message: "Stamina insuficiente",
+      need: staminaNeed,
+      have: obj.staminaPoints,
+    });
+  }
+  if (capNeed > 0 && freeCap < capNeed) {
+    return res.status(400).json({
+      message: "Capacidad libre insuficiente",
+      need: capNeed,
+      free: freeCap,
+    });
+  }
+
+  const skillBase =
+    card.damageSkill != null ? skillBaseForDamage(obj, card.damageSkill) : 0;
+  const effectivePower = skillBase + card.spellSkillBonus;
+
+  const updated = await prisma.$transaction(async (tx) => {
+    await tx.card.delete({ where: { id: cardId } });
+    return tx.gameObject.update({
+      where: { id: objectId },
+      data: {
+        manaPoints: obj.manaPoints - manaNeed,
+        staminaPoints: obj.staminaPoints - staminaNeed,
+      },
+      include: { cards: true, inventorySlots: true },
+    });
+  });
+
+  res.json({
+    object: updated,
+    used: {
+      cardId: card.id,
+      name: card.name,
+      deckCategory: card.deckCategory,
+      damageSkill: card.damageSkill,
+      skillBase,
+      spellSkillBonus: card.spellSkillBonus,
+      effectivePower,
+      manaSpent: manaNeed,
+      staminaSpent: staminaNeed,
+    },
+  });
+});
+
 app.get("/boards", async (_req, res) => {
   const boards = await prisma.board.findMany({
     orderBy: { createdAt: "asc" },
@@ -385,7 +672,9 @@ app.get("/boards/:id/objects", async (req, res) => {
     },
   });
   if (!board) return res.status(404).json({ message: "Board no encontrado" });
-  res.json(board.objects);
+  const link = await prisma.dungeonBoard.findUnique({ where: { boardId: req.params.id } });
+  const floor = link?.floor ?? null;
+  res.json(board.objects.map((o) => ({ ...o, floor })));
 });
 
 app.get("/boards/:id/equipment-items", async (req, res) => {
@@ -469,6 +758,7 @@ function sameCard(
     rapidSpell: boolean;
     spellSkillBonus: number;
     critMultiplier: number | null;
+    damageSkill: SpellDamageSkill | null;
   },
   b: {
     name?: string;
@@ -480,6 +770,7 @@ function sameCard(
     rapidSpell?: boolean;
     spellSkillBonus?: number;
     critMultiplier?: number | null;
+    damageSkill?: SpellDamageSkill | null;
   },
 ) {
   return (
@@ -491,7 +782,8 @@ function sameCard(
     a.capacityCost === (b.capacityCost ?? null) &&
     a.rapidSpell === (b.rapidSpell ?? false) &&
     a.spellSkillBonus === (b.spellSkillBonus ?? 0) &&
-    a.critMultiplier === (b.critMultiplier ?? null)
+    a.critMultiplier === (b.critMultiplier ?? null) &&
+    a.damageSkill === (b.damageSkill ?? null)
   );
 }
 
@@ -501,6 +793,10 @@ app.post("/boards/:id/sync", async (req, res) => {
 
   const board = await prisma.board.findUnique({ where: { id: req.params.id } });
   if (!board) return res.status(404).json({ message: "Board no encontrado" });
+
+  if (await boardHasActiveCombat(req.params.id)) {
+    return res.status(400).json({ message: "Partida activa: sincronizacion deshabilitada" });
+  }
 
   let created = 0;
   let updated = 0;
@@ -672,6 +968,12 @@ app.post("/boards/:id/objects", async (req, res) => {
   const board = await prisma.board.findUnique({ where: { id: req.params.id } });
   if (!board) return res.status(404).json({ message: "Board no encontrado" });
 
+  if (await boardHasActiveCombat(req.params.id)) {
+    return res.status(400).json({
+      message: "Partida activa: no se pueden crear objetos (solo spawn de criaturas)",
+    });
+  }
+
   const { cards, inventorySlots, ...rest } = parsed.data;
 
   const norm = await normalizeGameObjectCombatAndProgression(prisma, req.params.id, {
@@ -744,6 +1046,10 @@ app.patch("/objects/:id", async (req, res) => {
 
   const existingRow = await prisma.gameObject.findUnique({ where: { id: req.params.id } });
   if (!existingRow) return res.status(404).json({ message: "Objeto no encontrado" });
+
+  if (await boardHasActiveCombat(existingRow.boardId)) {
+    return res.status(400).json({ message: "Partida activa: no se pueden editar objetos" });
+  }
 
   try {
     const updated = await prisma.$transaction(async (tx) => {
@@ -864,6 +1170,11 @@ app.patch("/objects/:id", async (req, res) => {
 });
 
 app.delete("/objects/:id", async (req, res) => {
+  const row = await prisma.gameObject.findUnique({ where: { id: req.params.id } });
+  if (!row) return res.status(404).json({ message: "Objeto no encontrado" });
+  if (await boardHasActiveCombat(row.boardId)) {
+    return res.status(400).json({ message: "Partida activa: no eliminar objetos" });
+  }
   try {
     await prisma.gameObject.delete({ where: { id: req.params.id } });
     res.status(204).send();
@@ -878,6 +1189,12 @@ app.post("/objects/:id/move", async (req, res) => {
 
   const object = await prisma.gameObject.findUnique({ where: { id: req.params.id } });
   if (!object) return res.status(404).json({ message: "Objeto no encontrado" });
+
+  if (await boardHasActiveCombat(object.boardId)) {
+    return res
+      .status(400)
+      .json({ message: "Partida activa: use el movimiento de combate (no el movimiento de exploracion)" });
+  }
 
   if (object.objectKind === "PLAYER" && object.staminaPoints <= 0) {
     return res.status(400).json({ message: "Stamina insuficiente" });

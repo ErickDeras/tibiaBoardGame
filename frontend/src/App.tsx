@@ -4,7 +4,11 @@ import { api } from "./api";
 import { API_BASE, FIELD_BY_SLOT } from "./constants";
 import { BoardView } from "./components/BoardView";
 import { BestiaryPanel } from "./components/BestiaryPanel";
+import { CardTemplatesPanel } from "./components/CardTemplatesPanel";
+import { CombatBar } from "./components/CombatBar";
+import { CombatLog } from "./components/CombatLog";
 import { DungeonManager } from "./components/DungeonManager";
+import { ItemTemplatesPanel } from "./components/ItemTemplatesPanel";
 import { EquipmentCatalog, emptyEquipmentForm } from "./components/EquipmentCatalog";
 import { ObjectEditor } from "./components/ObjectEditor";
 import {
@@ -22,10 +26,13 @@ import {
 import type {
   BaseStats,
   Board,
+  CardTemplate,
+  CombatSession,
   CreatureTemplate,
   Dungeon,
   EquipmentValue,
   GameObject,
+  ItemTemplate,
   ObjectForm,
   SyncObjectPayload,
 } from "./types";
@@ -56,20 +63,6 @@ function equipmentBonuses(items: EquipmentValue[]) {
       weight: 0,
     },
   );
-}
-
-function newCard(n: number) {
-  return {
-    name: `Carta ${n}`,
-    description: "",
-    deckCategory: "SPELL_ATTACK" as const,
-    manaCost: null as number | null,
-    staminaCost: null as number | null,
-    capacityCost: null as number | null,
-    rapidSpell: false,
-    spellSkillBonus: 0,
-    critMultiplier: null as number | null,
-  };
 }
 
 const emptyForm: ObjectForm = {
@@ -108,7 +101,7 @@ const emptyForm: ObjectForm = {
   capacityMax: 400,
   spriteUrl: "",
   inventorySlots: [],
-  cards: [newCard(1), newCard(2), newCard(3), newCard(4), newCard(5)],
+  cards: [],
 };
 
 function toSaveBody(form: ObjectForm) {
@@ -157,6 +150,7 @@ function toSaveBody(form: ObjectForm) {
       rapidSpell: c.rapidSpell,
       spellSkillBonus: c.spellSkillBonus,
       critMultiplier: c.critMultiplier,
+      damageSkill: c.damageSkill,
     })),
     inventorySlots:
       form.objectKind === "PLAYER"
@@ -196,6 +190,11 @@ function App() {
     capacityMax: 0,
   });
   const [templates, setTemplates] = useState<CreatureTemplate[]>([]);
+  const [cardTemplates, setCardTemplates] = useState<CardTemplate[]>([]);
+  const [itemTemplates, setItemTemplates] = useState<ItemTemplate[]>([]);
+  const [combatSession, setCombatSession] = useState<CombatSession | null>(null);
+  const [combatTargetId, setCombatTargetId] = useState("");
+  const [combatBusy, setCombatBusy] = useState(false);
   const [spawnTemplateId, setSpawnTemplateId] = useState("");
   const [spawnMode, setSpawnMode] = useState(false);
   const [lootBusy, setLootBusy] = useState(false);
@@ -216,20 +215,26 @@ function App() {
     void loadBoards();
     void loadDungeons();
     void loadTemplates();
+    void loadCardTemplates();
+    void loadItemTemplates();
   }, []);
 
   useEffect(() => {
     if (!selectedBoardId) return;
+    setCombatTargetId("");
     void loadObjects(selectedBoardId);
     void loadEquipmentItems(selectedBoardId);
+    void refreshCombatFor(selectedBoardId);
   }, [selectedBoardId]);
 
   useEffect(() => {
     objectsRef.current = objects;
   }, [objects]);
 
+  const combatActive = combatSession?.status === "ACTIVE";
+
   useEffect(() => {
-    if (!selectedBoardId) return;
+    if (!selectedBoardId || combatActive) return;
 
     const autosave = setInterval(() => {
       const payload: { objects: SyncObjectPayload[] } = {
@@ -296,6 +301,7 @@ function App() {
               rapidSpell: c.rapidSpell,
               spellSkillBonus: c.spellSkillBonus,
               critMultiplier: c.critMultiplier,
+              damageSkill: c.damageSkill,
             })),
             inventorySlots: n.inventorySlots.map((s) => ({
               slotIndex: s.slotIndex,
@@ -322,7 +328,7 @@ function App() {
     }, 30_000);
 
     return () => clearInterval(autosave);
-  }, [selectedBoardId]);
+  }, [selectedBoardId, combatActive]);
 
   useEffect(() => {
     if (selectedObject) {
@@ -533,6 +539,33 @@ function App() {
     }
   }
 
+  async function loadCardTemplates() {
+    try {
+      const data = await api<CardTemplate[]>("/card-templates");
+      setCardTemplates(data);
+    } catch (err) {
+      setError(String(err));
+    }
+  }
+
+  async function loadItemTemplates() {
+    try {
+      const data = await api<ItemTemplate[]>("/item-templates");
+      setItemTemplates(data);
+    } catch (err) {
+      setError(String(err));
+    }
+  }
+
+  async function refreshCombatFor(boardId: string) {
+    try {
+      const r = await api<{ session: CombatSession | null }>(`/boards/${boardId}/combat`);
+      setCombatSession(r.session);
+    } catch {
+      setCombatSession(null);
+    }
+  }
+
   async function loadBoards() {
     setLoading(true);
     setError("");
@@ -563,6 +596,7 @@ function App() {
       setError(String(err));
     } finally {
       setLoading(false);
+      void refreshCombatFor(boardId);
     }
   }
 
@@ -699,6 +733,14 @@ function App() {
   }
 
   function handleCellClick(_x: number, _y: number, occupant: GameObject | undefined) {
+    if (
+      combatSession?.status === "ACTIVE" &&
+      occupant?.objectKind === "CREATURE" &&
+      combatSession.currentActorId === selectedObjectId
+    ) {
+      setCombatTargetId(occupant.id);
+      return;
+    }
     if (occupant) {
       setSelectedObjectId(occupant.id);
       return;
@@ -764,8 +806,8 @@ function App() {
               onClick={() => setSelectedObjectId(obj.id)}
             >
               {obj.name} ({obj.objectKind}
-              {obj.profession ? ` / ${obj.profession}` : ""}) [{obj.x},{obj.y}] inv{" "}
-              {inventoryWeight(obj.inventorySlots)}w
+              {obj.profession ? ` / ${obj.profession}` : ""}) [{obj.x},{obj.y}
+              {obj.floor != null ? ` z${obj.floor}` : ""}] inv {inventoryWeight(obj.inventorySlots)}w
             </button>
           ))}
         </div>
@@ -790,6 +832,22 @@ function App() {
           spawnMode={spawnMode}
           setSpawnMode={setSpawnMode}
         />
+
+        <CardTemplatesPanel
+          templates={cardTemplates}
+          onReload={async () => {
+            await loadCardTemplates();
+          }}
+          onError={setError}
+        />
+
+        <ItemTemplatesPanel
+          items={itemTemplates}
+          onReload={async () => {
+            await loadItemTemplates();
+          }}
+          onError={setError}
+        />
       </aside>
 
       <section className="main">
@@ -805,6 +863,50 @@ function App() {
           selectedObject={selectedObject}
           onCellClick={handleCellClick}
         />
+
+        {selectedBoardId ? (
+          <CombatBar
+            boardId={selectedBoardId}
+            session={combatSession}
+            objects={objects}
+            selectedObjectId={selectedObjectId}
+            combatTargetId={combatTargetId}
+            combatBusy={combatBusy}
+            setCombatBusy={setCombatBusy}
+            onStart={async () => {
+              setError("");
+              try {
+                await api(`/boards/${selectedBoardId}/combat/start`, { method: "POST", body: "{}" });
+                await loadObjects(selectedBoardId);
+                await refreshCombatFor(selectedBoardId);
+              } catch (e) {
+                setError(String(e));
+              }
+            }}
+            onEnd={async () => {
+              setError("");
+              try {
+                await api(`/boards/${selectedBoardId}/combat/end`, { method: "POST", body: "{}" });
+                await refreshCombatFor(selectedBoardId);
+              } catch (e) {
+                setError(String(e));
+              }
+            }}
+            onRefreshCombat={async () => {
+              if (selectedBoardId) await refreshCombatFor(selectedBoardId);
+            }}
+            onObjectsUpdate={(next) => {
+              setObjects(next);
+              objectsRef.current = next;
+            }}
+            onReloadObjects={async () => {
+              if (selectedBoardId) await loadObjects(selectedBoardId);
+            }}
+            onError={setError}
+          />
+        ) : null}
+
+        <CombatLog entries={combatSession?.logEntries} />
       </section>
 
       <ObjectEditor
@@ -821,9 +923,14 @@ function App() {
         onNew={() => setSelectedObjectId("")}
         onCollectLoot={(collectorId) => void collectLoot(collectorId)}
         lootBusy={lootBusy}
+        cardTemplates={cardTemplates}
+        onRefreshObjects={async () => {
+          if (selectedBoardId) await loadObjects(selectedBoardId);
+        }}
+        onError={setError}
+        combatLocked={combatActive}
       />
     </main>
   );
 }
-
 export default App;
