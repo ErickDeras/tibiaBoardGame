@@ -64,7 +64,11 @@ async function seedMeleeGear(boardId: string) {
 }
 
 beforeEach(async () => {
+  await prisma.combatLogEntry.deleteMany();
+  await prisma.combatSession.deleteMany();
+  await prisma.groundLoot.deleteMany();
   await prisma.lootEntry.deleteMany();
+  await prisma.itemTemplate.deleteMany();
   await prisma.creatureTemplate.deleteMany();
   await prisma.dungeonBoard.deleteMany();
   await prisma.dungeon.deleteMany();
@@ -457,5 +461,109 @@ describe("card templates and use", () => {
     expect(useRes.body.used.effectivePower).toBe(43);
     expect(useRes.body.used.manaSpent).toBe(5);
     expect(useRes.body.used.staminaSpent).toBe(1);
+  });
+});
+
+describe("combat", () => {
+  it("starts combat, player basic attack, creature counter; blocks patch and exploration move", async () => {
+    const boardRes = await request(app).post("/boards").send({ name: "Combat Board" });
+    await seedMeleeGear(boardRes.body.id);
+
+    const playerRes = await request(app).post(`/boards/${boardRes.body.id}/objects`).send({
+      x: 0,
+      y: 0,
+      name: "Hero",
+      ...baseObjectBody,
+    });
+    expect(playerRes.status).toBe(201);
+
+    const tpl = await request(app).post("/creature-templates").send({
+      name: "Rat",
+      hitpoints: 50,
+      defenseValue: 2,
+      attackValue: 5,
+    });
+    const spawn = await request(app).post(`/boards/${boardRes.body.id}/spawn-creature`).send({
+      templateId: tpl.body.id,
+      x: 1,
+      y: 0,
+    });
+    expect(spawn.status).toBe(201);
+
+    const start = await request(app).post(`/boards/${boardRes.body.id}/combat/start`).send({});
+    expect(start.status).toBe(201);
+
+    const patch = await request(app).patch(`/objects/${playerRes.body.id}`).send({ name: "Renamed" });
+    expect(patch.status).toBe(400);
+
+    const moveExpl = await request(app).post(`/objects/${playerRes.body.id}/move`).send({ x: 0, y: 1 });
+    expect(moveExpl.status).toBe(400);
+
+    const pTurn = await request(app).post(`/boards/${boardRes.body.id}/combat/turn/player`).send({
+      actorId: playerRes.body.id,
+      moves: [],
+      basicAttack: { kind: "melee", targetId: spawn.body.id },
+      cardAction: null,
+    });
+    expect(pTurn.status).toBe(200);
+    const ratAfter = pTurn.body.objects.find((o: { id: string }) => o.id === spawn.body.id);
+    expect(ratAfter.hitpoints).toBe(42);
+
+    const cTurn = await request(app).post(`/boards/${boardRes.body.id}/combat/turn/creature`).send({
+      actorId: spawn.body.id,
+    });
+    expect(cTurn.status).toBe(200);
+    const heroAfter = cTurn.body.objects.find((o: { id: string }) => o.id === playerRes.body.id);
+    expect(heroAfter.hitpoints).toBe(99);
+  });
+
+  it("drops ground loot when creature dies and player can collect", async () => {
+    const boardRes = await request(app).post("/boards").send({ name: "Loot Combat" });
+    await seedMeleeGear(boardRes.body.id);
+
+    const playerRes = await request(app).post(`/boards/${boardRes.body.id}/objects`).send({
+      x: 0,
+      y: 0,
+      name: "Hero",
+      ...baseObjectBody,
+    });
+
+    const tpl = await request(app).post("/creature-templates").send({
+      name: "LootRat",
+      hitpoints: 8,
+      defenseValue: 0,
+      attackValue: 1,
+    });
+    await request(app).post(`/creature-templates/${tpl.body.id}/loot`).send({
+      itemName: "Gold",
+      weight: 1,
+      quantity: 3,
+    });
+
+    const spawn = await request(app).post(`/boards/${boardRes.body.id}/spawn-creature`).send({
+      templateId: tpl.body.id,
+      x: 1,
+      y: 0,
+    });
+
+    await request(app).post(`/boards/${boardRes.body.id}/combat/start`).send({});
+
+    await request(app).post(`/boards/${boardRes.body.id}/combat/turn/player`).send({
+      actorId: playerRes.body.id,
+      moves: [],
+      basicAttack: { kind: "melee", targetId: spawn.body.id },
+      cardAction: null,
+    });
+
+    const gl = await request(app).get(`/boards/${boardRes.body.id}/ground-loot`);
+    expect(gl.status).toBe(200);
+    expect(gl.body.length).toBeGreaterThan(0);
+
+    const col = await request(app).post(`/objects/${playerRes.body.id}/collect-ground-loot`).send({
+      x: 1,
+      y: 0,
+    });
+    expect(col.status).toBe(200);
+    expect(col.body.player.inventorySlots.length).toBeGreaterThan(0);
   });
 });

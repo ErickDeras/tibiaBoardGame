@@ -29,6 +29,7 @@ type Props = {
   cardTemplates: CardTemplate[];
   onRefreshObjects: () => Promise<void>;
   onError: (msg: string) => void;
+  combatLocked?: boolean;
 };
 
 export function ObjectEditor({
@@ -48,6 +49,7 @@ export function ObjectEditor({
   cardTemplates,
   onRefreshObjects,
   onError,
+  combatLocked = false,
 }: Props) {
   const [collectorId, setCollectorId] = useState("");
 
@@ -74,7 +76,10 @@ export function ObjectEditor({
   return (
     <aside className="editor">
       <h2>{selectedObjectId ? "Editar objeto" : "Crear objeto"}</h2>
-      <div className="form">
+      {combatLocked ? (
+        <p className="hint">Partida activa: edicion de objetos deshabilitada.</p>
+      ) : null}
+      <fieldset className="form" disabled={combatLocked}>
         <label>
           Nombre
           <input
@@ -495,7 +500,7 @@ export function ObjectEditor({
             <img src={form.spriteUrl} alt="preview" />
           </div>
         )}
-      </div>
+      </fieldset>
     </aside>
   );
 }

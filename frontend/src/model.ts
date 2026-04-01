@@ -156,6 +156,7 @@ export function normalizeGameObject(obj: GameObject): GameObject {
     creatureTemplateId: obj.creatureTemplateId ?? null,
     backpackEquipment: obj.backpackEquipment ?? "",
     magicAttackValue: obj.magicAttackValue ?? 0,
+    floor: obj.floor ?? null,
     cards: normalizeCards(obj.cards),
     inventorySlots: normalizeInventorySlots(obj.inventorySlots),
   };

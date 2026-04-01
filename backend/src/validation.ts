@@ -178,6 +178,9 @@ export const createCreatureTemplateSchema = z.object({
   distanceSkill: z.number().int().min(0).default(0),
   shieldingSkill: z.number().int().min(0).default(0),
   magicLevel: z.number().int().min(0).default(0),
+  abilityName: z.string().trim().default(""),
+  abilityManaCost: z.number().int().min(0).default(0),
+  abilityAttackBonus: z.number().int().min(0).default(0),
 });
 
 export const updateCreatureTemplateSchema = createCreatureTemplateSchema.partial();
@@ -186,7 +189,49 @@ export const createLootEntrySchema = z.object({
   itemName: z.string().trim().min(1),
   weight: z.number().int().min(0).default(0),
   quantity: z.number().int().min(1).default(1),
+  itemTemplateId: z.string().trim().min(1).optional().nullable(),
 });
+
+const basicKindValues = ["melee", "distance", "magic"] as const;
+
+export const combatPlayerTurnSchema = z.object({
+  actorId: z.string().trim().min(1),
+  moves: z
+    .array(z.object({ x: z.number().int().min(0).max(11), y: z.number().int().min(0).max(11) }))
+    .max(2)
+    .default([]),
+  basicAttack: z
+    .object({
+      kind: z.enum(basicKindValues),
+      targetId: z.string().trim().min(1),
+    })
+    .optional()
+    .nullable(),
+  cardAction: z
+    .object({
+      cardId: z.string().trim().min(1),
+      targetId: z.string().trim().min(1),
+    })
+    .optional()
+    .nullable(),
+});
+
+export const combatCreatureTurnSchema = z.object({
+  actorId: z.string().trim().min(1),
+});
+
+export const collectGroundLootSchema = z.object({
+  x: z.number().int().min(0).max(11),
+  y: z.number().int().min(0).max(11),
+});
+
+export const createItemTemplateSchema = z.object({
+  name: z.string().trim().min(1),
+  description: z.string().trim().default(""),
+  weight: z.number().int().min(0).default(0),
+});
+
+export const updateItemTemplateSchema = createItemTemplateSchema.partial();
 
 export const spawnCreatureSchema = z.object({
   templateId: z.string().trim().min(1),
