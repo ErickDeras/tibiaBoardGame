@@ -517,6 +517,39 @@ describe("combat", () => {
     expect(heroAfter.hitpoints).toBe(99);
   });
 
+  it("can start combat again after ending previous session on same board", async () => {
+    const boardRes = await request(app).post("/boards").send({ name: "Restart Combat" });
+    await seedMeleeGear(boardRes.body.id);
+
+    const playerRes = await request(app).post(`/boards/${boardRes.body.id}/objects`).send({
+      x: 0,
+      y: 0,
+      name: "Hero",
+      ...baseObjectBody,
+    });
+    const tpl = await request(app).post("/creature-templates").send({
+      name: "RestartRat",
+      hitpoints: 10,
+      defenseValue: 0,
+      attackValue: 1,
+    });
+    await request(app).post(`/boards/${boardRes.body.id}/spawn-creature`).send({
+      templateId: tpl.body.id,
+      x: 1,
+      y: 0,
+    });
+
+    const first = await request(app).post(`/boards/${boardRes.body.id}/combat/start`).send({});
+    expect(first.status).toBe(201);
+
+    const end = await request(app).post(`/boards/${boardRes.body.id}/combat/end`).send({});
+    expect(end.status).toBe(200);
+
+    const second = await request(app).post(`/boards/${boardRes.body.id}/combat/start`).send({});
+    expect(second.status).toBe(201);
+    expect(second.body.boardId).toBe(boardRes.body.id);
+  });
+
   it("drops ground loot when creature dies and player can collect", async () => {
     const boardRes = await request(app).post("/boards").send({ name: "Loot Combat" });
     await seedMeleeGear(boardRes.body.id);

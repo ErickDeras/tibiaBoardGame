@@ -278,40 +278,44 @@ async function advanceTurnState(
 }
 
 export async function startCombatSession(boardId: string) {
-  const existing = await prisma.combatSession.findFirst({
-    where: { boardId, status: "ACTIVE" },
-  });
-  if (existing) {
-    return { error: "Ya hay una partida activa en este tablero" as const };
-  }
   const board = await prisma.board.findUnique({ where: { id: boardId } });
   if (!board) return { error: "Board no encontrado" as const };
 
-  const objects = await loadBoardObjects(prisma, boardId);
-  const order = buildTurnOrderFromObjects(objects);
-  if (order.length === 0) {
-    return { error: "No hay combatientes vivos en el tablero" as const };
-  }
+  return prisma.$transaction(async (tx) => {
+    const existing = await tx.combatSession.findUnique({ where: { boardId } });
+    if (existing?.status === "ACTIVE") {
+      return { error: "Ya hay una partida activa en este tablero" as const };
+    }
+    if (existing) {
+      await tx.combatSession.delete({ where: { boardId } });
+    }
 
-  const session = await prisma.combatSession.create({
-    data: {
-      boardId,
-      status: "ACTIVE",
-      turnOrder: order,
-      turnIndex: 0,
-      currentActorId: order[0]!,
-      pendingAddIds: [],
-      actorTurnState: Prisma.DbNull,
-    },
+    const objects = await loadBoardObjects(tx, boardId);
+    const order = buildTurnOrderFromObjects(objects);
+    if (order.length === 0) {
+      return { error: "No hay combatientes vivos en el tablero" as const };
+    }
+
+    const session = await tx.combatSession.create({
+      data: {
+        boardId,
+        status: "ACTIVE",
+        turnOrder: order,
+        turnIndex: 0,
+        currentActorId: order[0]!,
+        pendingAddIds: [],
+        actorTurnState: Prisma.DbNull,
+      },
+    });
+    await tx.combatLogEntry.create({
+      data: {
+        sessionId: session.id,
+        type: "COMBAT_START",
+        payload: { boardId, turnOrder: order },
+      },
+    });
+    return { session };
   });
-  await prisma.combatLogEntry.create({
-    data: {
-      sessionId: session.id,
-      type: "COMBAT_START",
-      payload: { boardId, turnOrder: order },
-    },
-  });
-  return { session };
 }
 
 export async function endCombatSession(boardId: string) {
