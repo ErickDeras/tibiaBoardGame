@@ -1,4 +1,90 @@
-import type { Card, DeckCategory, GameObject, InventorySlotRow } from "./types";
+import type { Card, DeckCategory, GameObject, InventorySlotRow, Profession } from "./types";
+
+/** Misma fórmula que el backend (`progression.experienceLevelFromTotalXp`). */
+export function experienceLevelFromTotalXp(totalXp: number): number {
+  const xp = Math.max(0, Math.floor(totalXp));
+  const disc = 85 * 85 + 60 * xp;
+  const raw = Math.floor((-85 + Math.sqrt(disc)) / 30);
+  return Math.max(1, raw);
+}
+
+/** +1 por nivel; guerrero +1; paladín +2 atk extra (igual que backend). */
+export function playerAttackLevelBonusPerStep(profession: Profession | null): number {
+  let n = 1;
+  if (profession === "guerrero") n += 1;
+  if (profession === "paladin") n += 2;
+  return n;
+}
+
+/** +1 por nivel; guerrero +1 def extra. */
+export function playerDefenseLevelBonusPerStep(profession: Profession | null): number {
+  let n = 1;
+  if (profession === "guerrero") n += 1;
+  return n;
+}
+
+/** +1 por nivel; mago/druida +2 nivel mágico extra. */
+export function playerMagicLevelBonusPerStep(profession: Profession | null): number {
+  let n = 1;
+  if (profession === "mago" || profession === "druida") n += 2;
+  return n;
+}
+
+/** Igual que backend `skillAttackPointsForProfession`; `magicBase` = ML base (personaje+ítems, sin bono por nivel). */
+export function skillAttackPointsForProfession(
+  profession: Profession | null,
+  skills: {
+    swordSkill: number;
+    axeSkill: number;
+    maceSkill: number;
+    distanceSkill: number;
+    magicBase: number;
+  },
+): number {
+  const p = profession;
+  const sword = Math.max(0, Math.floor(skills.swordSkill));
+  const axe = Math.max(0, Math.floor(skills.axeSkill));
+  const mace = Math.max(0, Math.floor(skills.maceSkill));
+  const distance = Math.max(0, Math.floor(skills.distanceSkill));
+  const magic = Math.max(0, Math.floor(skills.magicBase));
+  if (p === "guerrero") return Math.floor(0.1 * (sword + axe + mace));
+  if (p === "paladin") return Math.floor(0.1 * distance);
+  if (p === "mago" || p === "druida") return Math.floor(0.1 * magic);
+  return 0;
+}
+
+export function shieldingDefensePointsFromSkill(shieldingSkill: number): number {
+  const s = Math.max(0, Math.floor(shieldingSkill));
+  return Math.floor(0.1 * s);
+}
+
+/** Bonos por nivel (L>1); los valores de HP/Mana del formulario son base nivel 1. */
+export function playerHpManaBonusPerLevel(
+  profession: Profession | null,
+): { hitpoints: number; manaPoints: number } {
+  if (profession === "guerrero") return { hitpoints: 15, manaPoints: 5 };
+  if (profession === "mago" || profession === "druida") return { hitpoints: 5, manaPoints: 30 };
+  if (profession === "paladin") return { hitpoints: 10, manaPoints: 20 };
+  return { hitpoints: 0, manaPoints: 0 };
+}
+
+/** Convierte totales guardados en API → base para el editor. */
+export function playerHitpointsManaBaseFromStored(
+  objectKind: GameObject["objectKind"],
+  profession: Profession | null,
+  experienceLevel: number,
+  hitpoints: number,
+  manaPoints: number,
+): { hitpoints: number; manaPoints: number } {
+  if (objectKind !== "PLAYER") return { hitpoints, manaPoints };
+  const L = Math.max(1, experienceLevel);
+  const { hitpoints: hpG, manaPoints: mpG } = playerHpManaBonusPerLevel(profession);
+  const steps = Math.max(0, L - 1);
+  return {
+    hitpoints: Math.max(0, hitpoints - steps * hpG),
+    manaPoints: Math.max(0, manaPoints - steps * mpG),
+  };
+}
 
 export function normalizeInventorySlots(slots: InventorySlotRow[] | undefined): InventorySlotRow[] {
   if (!slots?.length) return [];

@@ -93,8 +93,75 @@ describe("board/object api", () => {
     expect(objectRes.body.cards).toHaveLength(5);
     expect(objectRes.body.attackValue).toBe(10);
     expect(objectRes.body.defenseValue).toBe(4);
-    expect(objectRes.body.magicAttackValue).toBe(10);
+    expect(objectRes.body.magicAttackValue).toBe(0);
     expect(objectRes.body.backpackEquipment).toBe("");
+  });
+
+  it("adds skill conversion to attack/defense with profession restrictions", async () => {
+    const boardRes = await request(app).post("/boards").send({ name: "Skills Board" });
+    expect(boardRes.status).toBe(201);
+    await seedMeleeGear(boardRes.body.id);
+
+    // Guerrero: solo sword/axe/mace suman a ataque (10%); distance NO suma.
+    const warriorRes = await request(app)
+      .post(`/boards/${boardRes.body.id}/objects`)
+      .send({
+        x: 0,
+        y: 0,
+        name: "Warrior",
+        ...baseObjectBody,
+        profession: "guerrero",
+        swordSkill: 50,
+        axeSkill: 25,
+        maceSkill: 25,
+        distanceSkill: 999,
+        shieldingSkill: 50,
+      });
+    expect(warriorRes.status).toBe(201);
+    // Weapon 10 + floor(0.1*(50+25+25))=10 => 20
+    expect(warriorRes.body.attackValue).toBe(20);
+    // Shield item 4 + floor(0.1*50)=5 => 9
+    expect(warriorRes.body.defenseValue).toBe(9);
+
+    // Paladin: solo distance suma a ataque; sword/axe/mace NO suman.
+    const paladinRes = await request(app)
+      .post(`/boards/${boardRes.body.id}/objects`)
+      .send({
+        x: 1,
+        y: 0,
+        name: "Paladin",
+        ...baseObjectBody,
+        profession: "paladin",
+        swordSkill: 999,
+        axeSkill: 999,
+        maceSkill: 999,
+        distanceSkill: 50,
+        shieldingSkill: 0,
+      });
+    expect(paladinRes.status).toBe(201);
+    // Weapon 10 + floor(0.1*50)=5 => 15
+    expect(paladinRes.body.attackValue).toBe(15);
+
+    // Mago: solo magicLevel suma a ataque; distance NO suma.
+    const mageRes = await request(app)
+      .post(`/boards/${boardRes.body.id}/objects`)
+      .send({
+        x: 2,
+        y: 0,
+        name: "Mage",
+        ...baseObjectBody,
+        profession: "mago",
+        weapon: "",
+        shield: "",
+        magicLevel: 80,
+        distanceSkill: 999,
+        shieldingSkill: 0,
+      });
+    expect(mageRes.status).toBe(201);
+    // Weapon 0 + floor(0.1*80)=8 => 8
+    expect(mageRes.body.attackValue).toBe(8);
+    // magicAttackValue solo usa magicLevel del personaje (no arma ni otras skills)
+    expect(mageRes.body.magicAttackValue).toBe(80);
   });
 
   it("moves only to adjacent cell and consumes stamina for PLAYER", async () => {
@@ -210,7 +277,9 @@ describe("board/object api", () => {
       });
     expect(objectRes.status).toBe(201);
     expect(objectRes.body.experienceLevel).toBe(2);
-    expect(objectRes.body.attackValue).toBe(Math.floor(10 * (1 + 0.05 * (2 - 1))));
+    expect(objectRes.body.attackValue).toBe(12);
+    expect(objectRes.body.hitpoints).toBe(115);
+    expect(objectRes.body.manaPoints).toBe(25);
   });
 });
 
