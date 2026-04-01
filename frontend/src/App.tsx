@@ -202,6 +202,11 @@ function App() {
   const selectedBoard = boards.find((b) => b.id === selectedBoardId);
   const selectedObject = objects.find((o) => o.id === selectedObjectId);
   const playersOnBoard = objects.filter((o) => o.objectKind === "PLAYER");
+  const isPlayerCombatTurn =
+    combatSession?.status === "ACTIVE" &&
+    Boolean(selectedObjectId) &&
+    selectedObjectId === combatSession.currentActorId &&
+    selectedObject?.objectKind === "PLAYER";
 
   useEffect(() => {
     if (window.location.protocol === "https:" && API_BASE.startsWith("http://")) {
@@ -867,6 +872,7 @@ function App() {
           objects={objects}
           selectedObjectId={selectedObjectId}
           selectedObject={selectedObject}
+          combatTargetId={isPlayerCombatTurn ? combatTargetId : ""}
           onCellClick={handleCellClick}
         />
 
