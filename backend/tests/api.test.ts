@@ -599,4 +599,80 @@ describe("combat", () => {
     expect(col.status).toBe(200);
     expect(col.body.player.inventorySlots.length).toBeGreaterThan(0);
   });
+
+  it("grants creature template experience to the player who deals killing blow", async () => {
+    const boardRes = await request(app).post("/boards").send({ name: "XP Board" });
+    await seedMeleeGear(boardRes.body.id);
+
+    const playerRes = await request(app).post(`/boards/${boardRes.body.id}/objects`).send({
+      x: 0,
+      y: 0,
+      name: "Hero",
+      ...baseObjectBody,
+      experiencePoints: 10,
+    });
+
+    const tpl = await request(app).post("/creature-templates").send({
+      name: "XpRat",
+      hitpoints: 4,
+      defenseValue: 0,
+      attackValue: 1,
+      experiencePoints: 60,
+    });
+    const spawn = await request(app).post(`/boards/${boardRes.body.id}/spawn-creature`).send({
+      templateId: tpl.body.id,
+      x: 1,
+      y: 0,
+    });
+    await request(app).post(`/boards/${boardRes.body.id}/combat/start`).send({});
+
+    const pTurn = await request(app).post(`/boards/${boardRes.body.id}/combat/turn/player`).send({
+      actorId: playerRes.body.id,
+      moves: [],
+      basicAttack: { kind: "melee", targetId: spawn.body.id },
+      cardAction: null,
+    });
+    expect(pTurn.status).toBe(200);
+    const hero = pTurn.body.objects.find((o: { id: string }) => o.id === playerRes.body.id);
+    expect(hero.experiencePoints).toBe(70);
+    expect(pTurn.body.objects.some((o: { id: string }) => o.id === spawn.body.id)).toBe(false);
+  });
+
+  it("GET /combat returns ended session so client can show log after wipe", async () => {
+    const boardRes = await request(app).post("/boards").send({ name: "Ended GET" });
+    await seedMeleeGear(boardRes.body.id);
+
+    const playerRes = await request(app).post(`/boards/${boardRes.body.id}/objects`).send({
+      x: 0,
+      y: 0,
+      name: "Hero",
+      ...baseObjectBody,
+    });
+
+    const tpl = await request(app).post("/creature-templates").send({
+      name: "SoloRat",
+      hitpoints: 6,
+      defenseValue: 0,
+      attackValue: 1,
+    });
+    const spawn = await request(app).post(`/boards/${boardRes.body.id}/spawn-creature`).send({
+      templateId: tpl.body.id,
+      x: 1,
+      y: 0,
+    });
+    await request(app).post(`/boards/${boardRes.body.id}/combat/start`).send({});
+
+    await request(app).post(`/boards/${boardRes.body.id}/combat/turn/player`).send({
+      actorId: playerRes.body.id,
+      moves: [],
+      basicAttack: { kind: "melee", targetId: spawn.body.id },
+      cardAction: null,
+    });
+
+    const g = await request(app).get(`/boards/${boardRes.body.id}/combat`);
+    expect(g.status).toBe(200);
+    expect(g.body.session).toBeDefined();
+    expect(g.body.session.status).toBe("ENDED");
+    expect(Array.isArray(g.body.session.logEntries)).toBe(true);
+  });
 });

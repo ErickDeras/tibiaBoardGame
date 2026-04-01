@@ -1,9 +1,15 @@
 import type { GameObject, Profession, SpellDamageSkill } from "@prisma/client";
 import { Prisma } from "@prisma/client";
 import { prisma } from "../prisma.js";
+import {
+  normalizeGameObjectCombatAndProgression,
+  playerHpManaBonusPerLevel,
+  playerMagicLevelBonusPerStep,
+} from "./combatStats.js";
 import { effectiveDamage } from "./combatDamage.js";
 import { pickCreatureTarget } from "./combatTargeting.js";
 import { parseActorTurnState, parseStringArray, type ActorTurnStateJson } from "./combatJson.js";
+import { experienceLevelFromTotalXp } from "./progression.js";
 
 export type Tx = Prisma.TransactionClient;
 
@@ -42,10 +48,22 @@ export function buildTurnOrderFromObjects(objects: ObjLite[]): string[] {
   return [...players.map((p) => p.id), ...creatures.map((c) => c.id)];
 }
 
+const combatLogInclude = {
+  logEntries: { orderBy: { createdAt: "desc" as const }, take: 80 },
+};
+
 export async function getActiveCombatSession(boardId: string) {
   return prisma.combatSession.findFirst({
     where: { boardId, status: "ACTIVE" },
-    include: { logEntries: { orderBy: { createdAt: "desc" }, take: 80 } },
+    include: combatLogInclude,
+  });
+}
+
+/** Sesión del tablero (activa o terminada), para mostrar log y estado tras el fin de partida. */
+export async function getCombatSessionForBoard(boardId: string) {
+  return prisma.combatSession.findUnique({
+    where: { boardId },
+    include: combatLogInclude,
   });
 }
 
@@ -134,6 +152,110 @@ function manhattan(a: { x: number; y: number }, b: { x: number; y: number }): nu
   return Math.abs(a.x - b.x) + Math.abs(a.y - b.y);
 }
 
+function cellKey(x: number, y: number): string {
+  return `${x},${y}`;
+}
+
+function neighbors4(x: number, y: number, w: number, h: number): { x: number; y: number }[] {
+  const o: { x: number; y: number }[] = [];
+  if (x > 0) o.push({ x: x - 1, y });
+  if (x < w - 1) o.push({ x: x + 1, y });
+  if (y > 0) o.push({ x, y: y - 1 });
+  if (y < h - 1) o.push({ x, y: y + 1 });
+  return o;
+}
+
+function cellInAttackRange(cx: number, cy: number, tx: number, ty: number, range: number): boolean {
+  return manhattan({ x: cx, y: cy }, { x: tx, y: ty }) <= range;
+}
+
+async function buildBlockedCells(tx: Tx, boardId: string, movingCreatureId: string): Promise<Set<string>> {
+  const rows = await tx.gameObject.findMany({ where: { boardId } });
+  const blocked = new Set<string>();
+  for (const o of rows) {
+    if (o.id === movingCreatureId) continue;
+    blocked.add(cellKey(o.x, o.y));
+  }
+  return blocked;
+}
+
+/** Hasta `maxSteps` casillas adyacentes hacia el objetivo (BFS), minimizando distancia Manhattan final. */
+function bfsPathTowardTarget(
+  sx: number,
+  sy: number,
+  tx: number,
+  ty: number,
+  blocked: Set<string>,
+  maxSteps: number,
+  w: number,
+  h: number,
+): { x: number; y: number }[] {
+  type Node = { x: number; y: number; path: { x: number; y: number }[] };
+  let frontier: Node[] = [{ x: sx, y: sy, path: [] }];
+  const seen = new Set<string>([cellKey(sx, sy)]);
+  let bestPath: { x: number; y: number }[] | null = null;
+  let bestDist = Number.POSITIVE_INFINITY;
+
+  const consider = (path: { x: number; y: number }[]) => {
+    const end = path.length > 0 ? path[path.length - 1]! : { x: sx, y: sy };
+    const dist = manhattan(end, { x: tx, y: ty });
+    const len = bestPath?.length ?? Number.POSITIVE_INFINITY;
+    if (dist < bestDist || (dist === bestDist && path.length < len)) {
+      bestDist = dist;
+      bestPath = [...path];
+    }
+  };
+
+  consider([]);
+
+  for (let depth = 0; depth < maxSteps; depth++) {
+    const next: Node[] = [];
+    for (const node of frontier) {
+      for (const nb of neighbors4(node.x, node.y, w, h)) {
+        const k = cellKey(nb.x, nb.y);
+        if (blocked.has(k)) continue;
+        if (seen.has(k)) continue;
+        seen.add(k);
+        const newPath = [...node.path, nb];
+        consider(newPath);
+        next.push({ x: nb.x, y: nb.y, path: newPath });
+      }
+    }
+    frontier = next;
+  }
+
+  return bestPath ?? [];
+}
+
+/** Un paso opcional si ya está en rango: acercarse sin perder alcance (p. ej. cuerpo a cuerpo). */
+function bestRelocationWhileInRange(
+  sx: number,
+  sy: number,
+  tx: number,
+  ty: number,
+  attackRange: number,
+  blocked: Set<string>,
+  w: number,
+  h: number,
+): { x: number; y: number } | null {
+  if (!cellInAttackRange(sx, sy, tx, ty, attackRange)) return null;
+  const startDist = manhattan({ x: sx, y: sy }, { x: tx, y: ty });
+  const opts = neighbors4(sx, sy, w, h).filter(
+    (n) =>
+      !blocked.has(cellKey(n.x, n.y)) && cellInAttackRange(n.x, n.y, tx, ty, attackRange),
+  );
+  let best: { x: number; y: number } | null = null;
+  let bestDist = startDist;
+  for (const n of opts) {
+    const nd = manhattan(n, { x: tx, y: ty });
+    if (nd < bestDist) {
+      bestDist = nd;
+      best = n;
+    }
+  }
+  return best;
+}
+
 function basicAttackRange(kind: "melee" | "distance" | "magic"): number {
   return kind === "melee" ? 1 : 99;
 }
@@ -206,13 +328,121 @@ async function dropGroundLootForCreature(
   }
 }
 
+async function eliminateCreatureKilledByPlayer(
+  tx: Tx,
+  sessionId: string,
+  boardId: string,
+  killerPlayerId: string,
+  dead: { id: string; name: string; creatureTemplateId: string | null; x: number; y: number },
+) {
+  await dropGroundLootForCreature(tx, boardId, dead.x, dead.y, dead.creatureTemplateId);
+
+  let xp = 0;
+  if (dead.creatureTemplateId) {
+    const tpl = await tx.creatureTemplate.findUnique({
+      where: { id: dead.creatureTemplateId },
+      select: { experiencePoints: true },
+    });
+    xp = tpl?.experiencePoints ?? 0;
+  }
+
+  const killer = await tx.gameObject.findFirst({
+    where: { id: killerPlayerId, boardId, objectKind: "PLAYER" },
+  });
+
+  let killerNewLevel: number | null = null;
+  let killerTotalXp: number | null = null;
+
+  if (killer) {
+    const newXp = killer.experiencePoints + xp;
+    const prevLevel = experienceLevelFromTotalXp(killer.experiencePoints);
+    const { hitpoints: hpPerLvPrev, manaPoints: mpPerLvPrev } = playerHpManaBonusPerLevel(
+      killer.profession,
+    );
+    const prevSteps = Math.max(0, prevLevel - 1);
+    const hpBase = Math.max(0, killer.hitpoints - prevSteps * hpPerLvPrev);
+    const mpBase = Math.max(0, killer.manaPoints - prevSteps * mpPerLvPrev);
+    const mlPerStepPrev = playerMagicLevelBonusPerStep(killer.profession);
+    const mlBase = Math.max(0, killer.magicLevel - prevSteps * mlPerStepPrev);
+
+    const norm = await normalizeGameObjectCombatAndProgression(tx, boardId, {
+      helmet: killer.helmet,
+      armor: killer.armor,
+      legs: killer.legs,
+      boots: killer.boots,
+      weapon: killer.weapon,
+      shield: killer.shield,
+      ring: killer.ring,
+      necklace: killer.necklace,
+      backpackEquipment: killer.backpackEquipment,
+      objectKind: "PLAYER",
+      profession: killer.profession,
+      experiencePoints: newXp,
+      experienceLevel: killer.experienceLevel,
+      hitpoints: hpBase,
+      manaPoints: mpBase,
+      attackValue: killer.attackValue,
+      defenseValue: killer.defenseValue,
+      magicAttackValue: killer.magicAttackValue ?? 0,
+      swordSkill: killer.swordSkill,
+      axeSkill: killer.axeSkill,
+      maceSkill: killer.maceSkill,
+      distanceSkill: killer.distanceSkill,
+      shieldingSkill: killer.shieldingSkill,
+      magicLevel: mlBase,
+    });
+
+    let newHp = killer.hitpoints;
+    let newMp = killer.manaPoints;
+    if (norm.experienceLevel > prevLevel) {
+      const d = norm.experienceLevel - prevLevel;
+      const { hitpoints: hpG, manaPoints: mpG } = playerHpManaBonusPerLevel(killer.profession);
+      newHp += d * hpG;
+      newMp += d * mpG;
+    }
+    const capHp = norm.hitpoints ?? killer.hitpoints;
+    const capMp = norm.manaPoints ?? killer.manaPoints;
+    newHp = Math.min(newHp, capHp);
+    newMp = Math.min(newMp, capMp);
+
+    await tx.gameObject.update({
+      where: { id: killerPlayerId },
+      data: {
+        experiencePoints: newXp,
+        experienceLevel: norm.experienceLevel,
+        attackValue: norm.attackValue,
+        defenseValue: norm.defenseValue,
+        magicAttackValue: norm.magicAttackValue,
+        magicLevel: norm.magicLevel ?? mlBase,
+        hitpoints: newHp,
+        manaPoints: newMp,
+      },
+    });
+    killerNewLevel = norm.experienceLevel;
+    killerTotalXp = newXp;
+  }
+
+  await appendLog(tx, sessionId, "CREATURE_ELIMINATED", {
+    eliminatedCreatureId: dead.id,
+    eliminatedCreatureName: dead.name,
+    killerId: killerPlayerId,
+    killerName: killer?.name ?? null,
+    experienceGained: xp,
+    killerNewExperienceLevel: killerNewLevel,
+    killerExperiencePoints: killerTotalXp,
+  });
+
+  await tx.gameObject.delete({ where: { id: dead.id } });
+}
+
 async function checkAndEndCombat(tx: Tx, sessionId: string, boardId: string): Promise<boolean> {
+  const sess = await tx.combatSession.findUniqueOrThrow({ where: { id: sessionId } });
   const objs = await loadBoardObjects(tx, boardId);
   const players = objs.filter((o) => o.objectKind === "PLAYER" && o.hitpoints > 0);
   const creatures = objs.filter((o) => o.objectKind === "CREATURE" && o.hitpoints > 0);
   const allPlayersDead = objs.some((o) => o.objectKind === "PLAYER") && players.length === 0;
   const allCreaturesDead =
-    objs.some((o) => o.objectKind === "CREATURE") && creatures.length === 0;
+    sess.initialAliveCreatureCount > 0 && creatures.length === 0;
   if (allPlayersDead || allCreaturesDead) {
     await tx.combatSession.update({
       where: { id: sessionId },
@@ -295,6 +525,9 @@ export async function startCombatSession(boardId: string) {
     if (order.length === 0) {
       return { error: "No hay combatientes vivos en el tablero" as const };
     }
+    const initialAliveCreatureCount = objects.filter(
+      (o) => o.objectKind === "CREATURE" && o.hitpoints > 0,
+    ).length;
 
     const session = await tx.combatSession.create({
       data: {
@@ -305,6 +538,7 @@ export async function startCombatSession(boardId: string) {
         currentActorId: order[0]!,
         pendingAddIds: [],
         actorTurnState: Prisma.DbNull,
+        initialAliveCreatureCount,
       },
     });
     await tx.combatLogEntry.create({
@@ -460,7 +694,13 @@ export async function runPlayerTurn(boardId: string, input: PlayerTurnInput) {
       });
       st = { ...st, basicUsed: true };
       if (hpAfter <= 0 && tgt.objectKind === "CREATURE") {
-        await dropGroundLootForCreature(tx, boardId, tgt.x, tgt.y, tgt.creatureTemplateId);
+        await eliminateCreatureKilledByPlayer(tx, session.id, boardId, actor.id, {
+          id: tgt.id,
+          name: tgt.name,
+          creatureTemplateId: tgt.creatureTemplateId,
+          x: tgt.x,
+          y: tgt.y,
+        });
       }
     }
 
@@ -547,7 +787,13 @@ export async function runPlayerTurn(boardId: string, input: PlayerTurnInput) {
       });
       st = { ...st, cardUsed: true };
       if (hpAfter <= 0 && tgt.objectKind === "CREATURE") {
-        await dropGroundLootForCreature(tx, boardId, tgt.x, tgt.y, tgt.creatureTemplateId);
+        await eliminateCreatureKilledByPlayer(tx, session.id, boardId, actorFresh.id, {
+          id: tgt.id,
+          name: tgt.name,
+          creatureTemplateId: tgt.creatureTemplateId,
+          x: tgt.x,
+          y: tgt.y,
+        });
       }
     }
 
@@ -591,7 +837,12 @@ export async function runCreatureTurn(boardId: string, actorId: string) {
       return { error: "No es el turno de esta criatura" as const };
     }
 
-    const creature = await tx.gameObject.findFirst({
+    const board = await tx.board.findUnique({ where: { id: boardId } });
+    if (!board) return { error: "Board no encontrado" as const };
+    const w = board.width;
+    const h = board.height;
+
+    let creature = await tx.gameObject.findFirst({
       where: { id: actorId, boardId },
       include: { creatureTemplate: true },
     });
@@ -607,6 +858,59 @@ export async function runCreatureTurn(boardId: string, actorId: string) {
       await appendLog(tx, session.id, "CREATURE_SKIP", {
         creatureId: creature.id,
         reason: "NO_PLAYER_TARGET",
+      });
+      const ended = await checkAndEndCombat(tx, session.id, boardId);
+      if (!ended) await advanceTurnState(tx, session, actorId);
+      const sess2 = await tx.combatSession.findUnique({ where: { id: session.id } });
+      const objsOut = await tx.gameObject.findMany({
+        where: { boardId },
+        include: { cards: true, inventorySlots: true },
+      });
+      return { ok: true as const, session: sess2, objects: objsOut };
+    }
+
+    const attackRange = creature.magicLevel > 0 ? 99 : 1;
+    const blocked = await buildBlockedCells(tx, boardId, creature.id);
+    const origX = creature.x;
+    const origY = creature.y;
+    let cx = origX;
+    let cy = origY;
+
+    let pathSteps: { x: number; y: number }[];
+    if (cellInAttackRange(cx, cy, tgt.x, tgt.y, attackRange)) {
+      const step = bestRelocationWhileInRange(cx, cy, tgt.x, tgt.y, attackRange, blocked, w, h);
+      pathSteps = step ? [step] : [];
+    } else {
+      pathSteps = bfsPathTowardTarget(cx, cy, tgt.x, tgt.y, blocked, 2, w, h);
+    }
+
+    if (pathSteps.length > 0) {
+      const fx = pathSteps[pathSteps.length - 1]!.x;
+      const fy = pathSteps[pathSteps.length - 1]!.y;
+      await tx.gameObject.update({
+        where: { id: creature.id },
+        data: { x: fx, y: fy },
+      });
+      await appendLog(tx, session.id, "COMBAT_MOVE", {
+        actorId: creature.id,
+        from: { x: origX, y: origY },
+        to: { x: fx, y: fy },
+        steps: pathSteps.length,
+      });
+      cx = fx;
+      cy = fy;
+    }
+
+    creature = await tx.gameObject.findFirstOrThrow({
+      where: { id: actorId, boardId },
+      include: { creatureTemplate: true },
+    });
+
+    if (!cellInAttackRange(cx, cy, tgt.x, tgt.y, attackRange)) {
+      await appendLog(tx, session.id, "CREATURE_SKIP", {
+        creatureId: creature.id,
+        reason: "TARGET_OUT_OF_RANGE",
+        targetId: tgt.id,
       });
       const ended = await checkAndEndCombat(tx, session.id, boardId);
       if (!ended) await advanceTurnState(tx, session, actorId);
@@ -635,13 +939,10 @@ export async function runCreatureTurn(boardId: string, actorId: string) {
       });
     }
 
-    const range = creature.magicLevel > 0 ? 99 : 1;
-    if (manhattan(creature, tgt) > range) {
-      await appendLog(tx, session.id, "CREATURE_SKIP", {
-        creatureId: creature.id,
-        reason: "TARGET_OUT_OF_RANGE",
-        targetId: tgt.id,
-      });
+    const tgtFresh = await tx.gameObject.findFirst({
+      where: { id: tgt.id, boardId },
+    });
+    if (!tgtFresh || tgtFresh.hitpoints <= 0) {
       const ended = await checkAndEndCombat(tx, session.id, boardId);
       if (!ended) await advanceTurnState(tx, session, actorId);
       const sess2 = await tx.combatSession.findUnique({ where: { id: session.id } });
@@ -652,31 +953,27 @@ export async function runCreatureTurn(boardId: string, actorId: string) {
       return { ok: true as const, session: sess2, objects: objsOut };
     }
 
-    const dmg = effectiveDamage(raw, tgt.defenseValue);
-    const hpBefore = tgt.hitpoints;
-    const hpAfter = Math.max(0, tgt.hitpoints - dmg);
+    const dmg = effectiveDamage(raw, tgtFresh.defenseValue);
+    const hpBefore = tgtFresh.hitpoints;
+    const hpAfter = Math.max(0, tgtFresh.hitpoints - dmg);
     await tx.gameObject.update({
-      where: { id: tgt.id },
+      where: { id: tgtFresh.id },
       data: { hitpoints: hpAfter },
     });
 
     await appendLog(tx, session.id, usedAbility ? "CREATURE_ABILITY" : "CREATURE_ATTACK", {
       category: usedAbility ? "CREATURE_ABILITY" : "BASIC_ATTACK",
       attackerId: creature.id,
-      attackerPos: { x: creature.x, y: creature.y },
-      targetId: tgt.id,
-      targetPos: { x: tgt.x, y: tgt.y },
+      attackerPos: { x: cx, y: cy },
+      targetId: tgtFresh.id,
+      targetPos: { x: tgtFresh.x, y: tgtFresh.y },
       attackValue: raw,
-      defenseValue: tgt.defenseValue,
+      defenseValue: tgtFresh.defenseValue,
       damage: dmg,
-      hpBefore,
-      hpAfter,
-      manaCost: usedAbility && tpl ? tpl.abilityManaCost : 0,
+      targetHpBefore: hpBefore,
+      targetHpAfter: hpAfter,
+      creatureManaSpent: usedAbility && tpl ? tpl.abilityManaCost : 0,
     });
-
-    if (hpAfter <= 0 && tgt.objectKind === "PLAYER") {
-      /* no ground loot */
-    }
 
     const ended = await checkAndEndCombat(tx, session.id, boardId);
     if (!ended) await advanceTurnState(tx, session, actorId);

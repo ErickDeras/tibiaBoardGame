@@ -181,6 +181,7 @@ export const createCreatureTemplateSchema = z.object({
   abilityName: z.string().trim().default(""),
   abilityManaCost: z.number().int().min(0).default(0),
   abilityAttackBonus: z.number().int().min(0).default(0),
+  experiencePoints: z.number().int().min(0).default(0),
 });
 
 export const updateCreatureTemplateSchema = createCreatureTemplateSchema.partial();
