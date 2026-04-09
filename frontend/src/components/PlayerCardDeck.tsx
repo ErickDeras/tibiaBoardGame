@@ -146,7 +146,7 @@ export function PlayerCardDeck({
                   <div className="playCardStats">
                     {card.damageSkill ? (
                       <span>
-                        {card.damageSkill}: poder {previewPower} (base {base} + bono {card.spellSkillBonus})
+                        {card.damageSkill}: poder {previewPower} (base {base} + bono {card.spellSkillBonus}, s)
                       </span>
                     ) : (
                       <span>Bono carta {card.spellSkillBonus}</span>

@@ -176,6 +176,7 @@ function App() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const objectsRef = useRef<GameObject[]>([]);
+  const lastAutosaveHashRef = useRef<string>("");
   const [equipmentItems, setEquipmentItems] = useState<EquipmentValue[]>([]);
   const [equipmentForm, setEquipmentForm] = useState(emptyEquipmentForm);
   const [baseStats, setBaseStats] = useState<BaseStats>({
@@ -323,6 +324,14 @@ function App() {
           };
         }),
       };
+
+      // En producción, reemplazar el estado entero en cada autosave puede verse como “refresh”
+      // (parpadeo / pantalla en blanco si algo falla durante el render). Así que:
+      // - si no hay cambios reales, no sincronizamos
+      // - si sincronizamos, SOLO reemplazamos `objects` si el server hizo cambios
+      const hash = JSON.stringify(payload);
+      if (hash === lastAutosaveHashRef.current) return;
+
       void api<{
         created: number;
         updated: number;
@@ -332,7 +341,12 @@ function App() {
         method: "POST",
         body: JSON.stringify(payload),
       })
-        .then((res) => setObjects(res.objects.map(normalizeGameObject)))
+        .then((res) => {
+          lastAutosaveHashRef.current = hash;
+          if (res.created > 0 || res.updated > 0) {
+            setObjects(res.objects.map(normalizeGameObject));
+          }
+        })
         .catch((err) => {
           setError(String(err));
         });
