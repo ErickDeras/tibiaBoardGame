@@ -3,10 +3,11 @@ services:
     name: tibia-boardgame-backend
     runtime: node
     buildCommand: npm --prefix backend ci && npm --prefix backend run prisma:generate && npm --prefix backend run build
-    startCommand: npm --prefix backend run prisma:prepare && npm --prefix backend run start
+    startCommand: npm --prefix backend run render:start
     envVars:
+      # Tres barras tras file: = ruta absoluta correcta para SQLite en muchos runtimes
       - key: DATABASE_URL
-        value: file:/var/data/dev.db
+        value: file:///var/data/dev.db
       - key: PORT
         value: "10000"
     disk:
