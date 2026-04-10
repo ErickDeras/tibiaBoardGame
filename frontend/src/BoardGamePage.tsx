@@ -9,6 +9,8 @@ import { BoardView } from "./components/BoardView";
 import { BestiaryPanel } from "./components/BestiaryPanel";
 import { CardTemplatesPanel } from "./components/CardTemplatesPanel";
 import { CombatBar } from "./components/CombatBar";
+import { PlayerCombatActions } from "./components/PlayerCombatActions";
+import { useCombatPlayerTurn } from "./hooks/useCombatPlayerTurn";
 import { CombatLog } from "./components/CombatLog";
 import { DungeonManager } from "./components/DungeonManager";
 import { ItemTemplatesPanel } from "./components/ItemTemplatesPanel";
@@ -222,6 +224,35 @@ export function BoardGamePage({
     Boolean(selectedObjectId) &&
     selectedObjectId === combatSession.currentActorId &&
     selectedObject?.objectKind === "PLAYER";
+
+  const refreshCombatFor = useCallback(async (boardId: string) => {
+    try {
+      const r = await api<{ session: CombatSession | null }>(`/boards/${boardId}/combat`);
+      setCombatSession(r.session);
+    } catch {
+      setCombatSession(null);
+    }
+  }, []);
+
+  const onCombatObjectsUpdate = useCallback((next: GameObject[]) => {
+    setObjects(next);
+    objectsRef.current = next;
+  }, []);
+
+  const onCombatRefresh = useCallback(async () => {
+    if (selectedBoardId) await refreshCombatFor(selectedBoardId);
+  }, [selectedBoardId, refreshCombatFor]);
+
+  const playerTurn = useCombatPlayerTurn({
+    boardId: selectedBoardId,
+    session: combatSession,
+    objects,
+    selectedObjectId,
+    setCombatBusy,
+    onObjectsUpdate: onCombatObjectsUpdate,
+    onRefreshCombat: onCombatRefresh,
+    onError: setError,
+  });
 
   useEffect(() => {
     if (window.location.protocol === "https:" && API_BASE.startsWith("http://")) {
@@ -663,15 +694,6 @@ export function BoardGamePage({
     }
   }
 
-  async function refreshCombatFor(boardId: string) {
-    try {
-      const r = await api<{ session: CombatSession | null }>(`/boards/${boardId}/combat`);
-      setCombatSession(r.session);
-    } catch {
-      setCombatSession(null);
-    }
-  }
-
   async function loadBoards() {
     setLoading(true);
     setError("");
@@ -981,13 +1003,45 @@ export function BoardGamePage({
           {error && <span className="error">{error}</span>}
         </header>
 
-        <BoardView
-          objects={objects}
-          selectedObjectId={selectedObjectId}
-          selectedObject={selectedObject}
-          combatTargetId={isPlayerCombatTurn ? combatTargetId : ""}
-          onCellClick={handleCellClick}
-        />
+        <div className="board-wrap">
+          <BoardView
+            objects={objects}
+            selectedObjectId={selectedObjectId}
+            selectedObject={selectedObject}
+            combatTargetId={isPlayerCombatTurn ? combatTargetId : ""}
+            onCellClick={handleCellClick}
+          />
+          {isPlayerCombatTurn ? (
+            <PlayerCombatActions
+              className="player-combat-actions--floating"
+              combatTargetId={combatTargetId}
+              objects={objects}
+              combatBusy={combatBusy}
+              isPlayerTurn
+              actorForCards={playerTurn.actorForCards}
+              basicKind={playerTurn.basicKind}
+              onAttack={() =>
+                void playerTurn.submitPlayerTurn({
+                  moves: [],
+                  basicAttack: { kind: playerTurn.basicKind, targetId: combatTargetId },
+                  cardAction: null,
+                })
+              }
+              onPass={() =>
+                void playerTurn.submitPlayerTurn({ moves: [], basicAttack: null, cardAction: null })
+              }
+              onStep={(dx, dy) => playerTurn.step(dx, dy)}
+              onUseCard={(cardId) =>
+                void playerTurn.submitPlayerTurn({
+                  moves: [],
+                  basicAttack: null,
+                  cardAction: { cardId, targetId: combatTargetId },
+                })
+              }
+              onError={setError}
+            />
+          ) : null}
+        </div>
 
         {selectedBoardId ? (
           <CombatBar
@@ -998,6 +1052,7 @@ export function BoardGamePage({
             combatTargetId={combatTargetId}
             combatBusy={combatBusy}
             setCombatBusy={setCombatBusy}
+            playerTurn={playerTurn}
             onStart={async () => {
               setError("");
               try {
