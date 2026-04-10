@@ -250,3 +250,19 @@ export const updateCardTemplateSchema = cardTemplateFieldsSchema.partial();
 export const addCardFromTemplateSchema = z.object({
   templateId: z.string().trim().min(1),
 });
+
+export const joinSessionSchema = z.object({
+  username: z.string().trim().min(1).max(40),
+});
+
+export const patchSessionSchema = z.object({
+  username: z.string().trim().min(1).max(40),
+});
+
+export const lobbyDevBodySchema = z.object({
+  body: z.string().trim().min(1).max(2000),
+});
+
+export const devNoteCreateSchema = z.object({
+  body: z.string().trim().min(1).max(8000),
+});

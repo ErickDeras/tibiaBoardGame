@@ -101,6 +101,7 @@ export type GameObject = {
   spriteUrl: string;
   cards: Card[];
   inventorySlots: InventorySlotRow[];
+  ownerSessionId?: string | null;
   /** Piso de mazmorra (1–4) si el tablero está enlazado; si no, null */
   floor?: number | null;
 };

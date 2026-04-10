@@ -1,5 +1,5 @@
 import request from "supertest";
-import { beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { app } from "../src/app.js";
 import { prisma } from "../src/prisma.js";
 
@@ -64,6 +64,9 @@ async function seedMeleeGear(boardId: string) {
 }
 
 beforeEach(async () => {
+  await prisma.roomChatMessage.deleteMany();
+  await prisma.lobbyDevChatMessage.deleteMany();
+  await prisma.matchArchive.deleteMany();
   await prisma.combatLogEntry.deleteMany();
   await prisma.combatSession.deleteMany();
   await prisma.groundLoot.deleteMany();
@@ -77,6 +80,8 @@ beforeEach(async () => {
   await prisma.inventorySlot.deleteMany();
   await prisma.gameObject.deleteMany();
   await prisma.equipmentItem.deleteMany();
+  await prisma.devNote.deleteMany();
+  await prisma.liveSession.deleteMany();
   await prisma.board.deleteMany();
 });
 
@@ -674,5 +679,314 @@ describe("combat", () => {
     expect(g.body.session).toBeDefined();
     expect(g.body.session.status).toBe("ENDED");
     expect(Array.isArray(g.body.session.logEntries)).toBe(true);
+  });
+});
+
+describe("shared global room (SHARED_BOARD_ID)", () => {
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
+  it("join fails when SHARED_BOARD_ID is not set", async () => {
+    vi.stubEnv("SHARED_BOARD_ID", "");
+    const res = await request(app).post("/api/sessions/join").send({ username: "a" });
+    expect(res.status).toBe(400);
+    expect(String(res.body.message ?? "")).toMatch(/configurada|Sala/i);
+  });
+
+  it("allows up to 4 joins then rejects; presence lists names", async () => {
+    const boardRes = await request(app).post("/boards").send({ name: "Room" });
+    const boardId = boardRes.body.id as string;
+    vi.stubEnv("SHARED_BOARD_ID", boardId);
+
+    const tokens: string[] = [];
+    for (let i = 0; i < 4; i++) {
+      const r = await request(app).post("/api/sessions/join").send({ username: `user${i}` });
+      expect(r.status).toBe(201);
+      tokens.push(r.body.token as string);
+    }
+    const fifth = await request(app).post("/api/sessions/join").send({ username: "user5" });
+    expect(fifth.status).toBe(403);
+
+    const pres = await request(app).get("/api/sessions/presence");
+    expect(pres.status).toBe(200);
+    expect(pres.body.usernames).toHaveLength(4);
+    expect(pres.body.full).toBe(true);
+
+    const auth = { Authorization: `Bearer ${tokens[0]}` };
+    const p1 = await request(app)
+      .post(`/boards/${boardId}/objects`)
+      .set(auth)
+      .send({ x: 0, y: 0, name: "P1", ...baseObjectBody });
+    expect(p1.status).toBe(201);
+    const dup = await request(app)
+      .post(`/boards/${boardId}/objects`)
+      .set(auth)
+      .send({ x: 1, y: 0, name: "P1b", ...baseObjectBody });
+    expect(dup.status).toBe(400);
+  });
+
+  it("rejects player turn for another session's character", async () => {
+    const boardRes = await request(app).post("/boards").send({ name: "Turn room" });
+    const boardId = boardRes.body.id as string;
+    vi.stubEnv("SHARED_BOARD_ID", boardId);
+
+    const j1 = await request(app).post("/api/sessions/join").send({ username: "alice" });
+    const j2 = await request(app).post("/api/sessions/join").send({ username: "bob" });
+    const t1 = j1.body.token as string;
+    const t2 = j2.body.token as string;
+
+    await seedMeleeGear(boardId);
+
+    const p1 = await request(app)
+      .post(`/boards/${boardId}/objects`)
+      .set({ Authorization: `Bearer ${t1}` })
+      .send({ x: 0, y: 0, name: "Alice", ...baseObjectBody });
+    expect(p1.status).toBe(201);
+    const p2 = await request(app)
+      .post(`/boards/${boardId}/objects`)
+      .set({ Authorization: `Bearer ${t2}` })
+      .send({ x: 1, y: 0, name: "Bob", ...baseObjectBody });
+    expect(p2.status).toBe(201);
+
+    const tpl = await request(app).post("/creature-templates").send({
+      name: "RatTurn",
+      hitpoints: 20,
+      defenseValue: 0,
+      attackValue: 1,
+    });
+    const spawn = await request(app)
+      .post(`/boards/${boardId}/spawn-creature`)
+      .set({ Authorization: `Bearer ${t1}` })
+      .send({
+        templateId: tpl.body.id,
+        x: 2,
+        y: 0,
+      });
+    expect(spawn.status).toBe(201);
+
+    await request(app)
+      .post(`/boards/${boardId}/combat/start`)
+      .set({ Authorization: `Bearer ${t1}` })
+      .send({});
+
+    const wrong = await request(app)
+      .post(`/boards/${boardId}/combat/turn/player`)
+      .set({ Authorization: `Bearer ${t2}` })
+      .send({
+        actorId: p1.body.id,
+        moves: [],
+        basicAttack: null,
+        cardAction: null,
+      });
+    expect(wrong.status).toBe(400);
+    expect(String(wrong.body.message ?? "")).toMatch(/personaje|Solo|controlar/i);
+  });
+
+  it("writes MatchArchive when combat ends manually", async () => {
+    const boardRes = await request(app).post("/boards").send({ name: "Archive room" });
+    const boardId = boardRes.body.id as string;
+    vi.stubEnv("SHARED_BOARD_ID", boardId);
+
+    const j = await request(app).post("/api/sessions/join").send({ username: "solo" });
+    const token = j.body.token as string;
+    await seedMeleeGear(boardId);
+    await request(app)
+      .post(`/boards/${boardId}/objects`)
+      .set({ Authorization: `Bearer ${token}` })
+      .send({ x: 0, y: 0, name: "Hero", ...baseObjectBody });
+
+    const tpl = await request(app).post("/creature-templates").send({
+      name: "RatArch",
+      hitpoints: 5,
+      defenseValue: 0,
+      attackValue: 1,
+    });
+    await request(app)
+      .post(`/boards/${boardId}/spawn-creature`)
+      .set({ Authorization: `Bearer ${token}` })
+      .send({
+        templateId: tpl.body.id,
+        x: 1,
+        y: 0,
+      });
+
+    await request(app)
+      .post(`/boards/${boardId}/combat/start`)
+      .set({ Authorization: `Bearer ${token}` })
+      .send({});
+
+    const end = await request(app)
+      .post(`/boards/${boardId}/combat/end`)
+      .set({ Authorization: `Bearer ${token}` })
+      .send({});
+    expect(end.status).toBe(200);
+
+    const rows = await prisma.matchArchive.findMany({ where: { boardId } });
+    expect(rows.length).toBe(1);
+    expect(Array.isArray(rows[0]!.entries)).toBe(true);
+    const entries = rows[0]!.entries as unknown[];
+    expect(entries.some((e: unknown) => (e as { type?: string }).type === "COMBAT_END")).toBe(true);
+  });
+
+  it("bootstrap then PATCH /me sets display name; pending excluded from presence", async () => {
+    const boardRes = await request(app).post("/boards").send({ name: "Boot" });
+    const boardId = boardRes.body.id as string;
+    vi.stubEnv("SHARED_BOARD_ID", boardId);
+
+    const boot = await request(app).post("/api/sessions/bootstrap").send({});
+    expect(boot.status).toBe(201);
+    expect(boot.body.needsUsername).toBe(true);
+    const token = boot.body.token as string;
+
+    const presPending = await request(app).get("/api/sessions/presence");
+    expect(presPending.body.usernames).toHaveLength(0);
+
+    const me1 = await request(app).get("/api/sessions/me").set({ Authorization: `Bearer ${token}` });
+    expect(me1.status).toBe(200);
+    expect(me1.body.needsUsername).toBe(true);
+
+    const patch = await request(app)
+      .patch("/api/sessions/me")
+      .set({ Authorization: `Bearer ${token}` })
+      .send({ username: "patchedUser" });
+    expect(patch.status).toBe(200);
+
+    const me2 = await request(app).get("/api/sessions/me").set({ Authorization: `Bearer ${token}` });
+    expect(me2.body.displayNameSet).toBe(true);
+    expect(me2.body.username).toBe("patchedUser");
+
+    const pres = await request(app).get("/api/sessions/presence");
+    expect(pres.body.usernames).toContain("patchedUser");
+  });
+
+  it("archives room chat into MatchArchive.conversationLog on combat end", async () => {
+    const boardRes = await request(app).post("/boards").send({ name: "Chat arch" });
+    const boardId = boardRes.body.id as string;
+    vi.stubEnv("SHARED_BOARD_ID", boardId);
+
+    const j = await request(app).post("/api/sessions/join").send({ username: "chatter" });
+    const token = j.body.token as string;
+    const sessionId = j.body.sessionId as string;
+
+    await prisma.roomChatMessage.create({
+      data: {
+        boardId,
+        liveSessionId: sessionId,
+        username: "chatter",
+        body: "msg antes del fin",
+      },
+    });
+
+    await seedMeleeGear(boardId);
+    await request(app)
+      .post(`/boards/${boardId}/objects`)
+      .set({ Authorization: `Bearer ${token}` })
+      .send({ x: 0, y: 0, name: "Hero", ...baseObjectBody });
+
+    const tpl = await request(app).post("/creature-templates").send({
+      name: "RatChat",
+      hitpoints: 5,
+      defenseValue: 0,
+      attackValue: 1,
+    });
+    await request(app)
+      .post(`/boards/${boardId}/spawn-creature`)
+      .set({ Authorization: `Bearer ${token}` })
+      .send({
+        templateId: tpl.body.id,
+        x: 1,
+        y: 0,
+      });
+
+    await request(app)
+      .post(`/boards/${boardId}/combat/start`)
+      .set({ Authorization: `Bearer ${token}` })
+      .send({});
+
+    const end = await request(app)
+      .post(`/boards/${boardId}/combat/end`)
+      .set({ Authorization: `Bearer ${token}` })
+      .send({});
+    expect(end.status).toBe(200);
+
+    const rows = await prisma.matchArchive.findMany({ where: { boardId } });
+    expect(rows.length).toBe(1);
+    const log = rows[0]!.conversationLog as unknown[];
+    expect(Array.isArray(log)).toBe(true);
+    expect(log.some((m: { body?: string }) => m.body === "msg antes del fin")).toBe(true);
+
+    const left = await prisma.roomChatMessage.count({ where: { boardId } });
+    expect(left).toBe(0);
+  });
+
+  it("rejects lobby-dev chat POST while combat is active", async () => {
+    const boardRes = await request(app).post("/boards").send({ name: "Lobby block" });
+    const boardId = boardRes.body.id as string;
+    vi.stubEnv("SHARED_BOARD_ID", boardId);
+
+    const j = await request(app).post("/api/sessions/join").send({ username: "lobbyuser" });
+    const token = j.body.token as string;
+
+    await seedMeleeGear(boardId);
+    await request(app)
+      .post(`/boards/${boardId}/objects`)
+      .set({ Authorization: `Bearer ${token}` })
+      .send({ x: 0, y: 0, name: "Hero", ...baseObjectBody });
+
+    const tpl = await request(app).post("/creature-templates").send({
+      name: "RatLobby",
+      hitpoints: 5,
+      defenseValue: 0,
+      attackValue: 1,
+    });
+    await request(app)
+      .post(`/boards/${boardId}/spawn-creature`)
+      .set({ Authorization: `Bearer ${token}` })
+      .send({
+        templateId: tpl.body.id,
+        x: 1,
+        y: 0,
+      });
+
+    await request(app)
+      .post(`/boards/${boardId}/combat/start`)
+      .set({ Authorization: `Bearer ${token}` })
+      .send({});
+
+    const blocked = await request(app)
+      .post("/api/lobby-dev-chat")
+      .set({ Authorization: `Bearer ${token}` })
+      .send({ body: "no debe pasar" });
+    expect(blocked.status).toBe(403);
+  });
+
+  it("returns last room chat messages for named session", async () => {
+    const boardRes = await request(app).post("/boards").send({ name: "Recent chat" });
+    const boardId = boardRes.body.id as string;
+    vi.stubEnv("SHARED_BOARD_ID", boardId);
+
+    const j = await request(app).post("/api/sessions/join").send({ username: "reader" });
+    const token = j.body.token as string;
+    const sessionId = j.body.sessionId as string;
+
+    for (let i = 0; i < 3; i++) {
+      await prisma.roomChatMessage.create({
+        data: {
+          boardId,
+          liveSessionId: sessionId,
+          username: "reader",
+          body: `line ${i}`,
+        },
+      });
+    }
+
+    const recent = await request(app)
+      .get("/api/room-chat/recent?limit=30")
+      .set({ Authorization: `Bearer ${token}` });
+    expect(recent.status).toBe(200);
+    expect(Array.isArray(recent.body)).toBe(true);
+    expect(recent.body).toHaveLength(3);
+    expect(recent.body[2].body).toBe("line 2");
   });
 });
