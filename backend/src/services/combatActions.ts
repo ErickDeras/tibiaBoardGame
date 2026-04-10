@@ -392,18 +392,18 @@ async function eliminateCreatureKilledByPlayer(
       magicLevel: mlBase,
     });
 
-    let newHp = killer.hitpoints;
-    let newMp = killer.manaPoints;
-    if (norm.experienceLevel > prevLevel) {
-      const d = norm.experienceLevel - prevLevel;
-      const { hitpoints: hpG, manaPoints: mpG } = playerHpManaBonusPerLevel(killer.profession);
-      newHp += d * hpG;
-      newMp += d * mpG;
-    }
     const capHp = norm.hitpoints ?? killer.hitpoints;
     const capMp = norm.manaPoints ?? killer.manaPoints;
-    newHp = Math.min(newHp, capHp);
-    newMp = Math.min(newMp, capMp);
+    let newHp: number;
+    let newMp: number;
+    if (norm.experienceLevel > prevLevel) {
+      // Subida de nivel: HP y maná al máximo del nuevo nivel
+      newHp = capHp;
+      newMp = capMp;
+    } else {
+      newHp = Math.min(killer.hitpoints, capHp);
+      newMp = Math.min(killer.manaPoints, capMp);
+    }
 
     await tx.gameObject.update({
       where: { id: killerPlayerId },

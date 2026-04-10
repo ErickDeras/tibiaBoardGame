@@ -252,7 +252,11 @@ function App() {
       const payload: { objects: SyncObjectPayload[] } = {
         objects: objectsRef.current.map((obj) => {
           const n = normalizeGameObject(obj);
-          const steps = Math.max(0, n.experienceLevel - 1);
+          // Nivel efectivo desde XP (como el backend), no solo experienceLevel en caché,
+          // para que tras ganar XP en combate el sync no envíe bases de vida/maná incorrectas.
+          const levelForDerivation =
+            n.objectKind === "PLAYER" ? experienceLevelFromTotalXp(n.experiencePoints) : n.experienceLevel;
+          const steps = Math.max(0, levelForDerivation - 1);
           const vitalGain = playerHpManaBonusPerLevel(n.profession);
           const hpBase =
             n.objectKind === "PLAYER"
