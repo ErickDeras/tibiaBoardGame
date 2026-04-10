@@ -40,8 +40,74 @@ model Board {
   dungeonLink    DungeonBoard?
   combatSession  CombatSession?
   groundLoots    GroundLoot[]
+  matchArchives  MatchArchive[]
+  roomChatMessages   RoomChatMessage[]
+  lobbyDevMessages LobbyDevChatMessage[]
   createdAt      DateTime        @default(now())
   updatedAt      DateTime        @updatedAt
+}
+
+/** Sesión en la sala global (máx. 4 activas por ventana de actividad). */
+model LiveSession {
+  id               String        @id @default(cuid())
+  tokenHash        String        @unique
+  username         String
+  /** false hasta que el usuario elija nombre (bootstrap + PATCH). */
+  displayNameSet   Boolean       @default(false)
+  lastSeenAt       DateTime      @default(now())
+  createdAt        DateTime      @default(now())
+  ownedPlayer      GameObject?
+  roomChatMessages   RoomChatMessage[]
+  lobbyDevMessages   LobbyDevChatMessage[]
+}
+
+/** Chat de sala archivado con cada partida (lobby previo + combate). */
+model RoomChatMessage {
+  id            String      @id @default(cuid())
+  boardId       String
+  board         Board       @relation(fields: [boardId], references: [id], onDelete: Cascade)
+  liveSessionId String
+  liveSession   LiveSession @relation(fields: [liveSessionId], references: [id], onDelete: Cascade)
+  username      String
+  characterName String?
+  body          String
+  createdAt     DateTime    @default(now())
+
+  @@index([boardId, createdAt])
+}
+
+/** Chat solo entre partidas (sin combate activo); se muestra en Notas dev. */
+model LobbyDevChatMessage {
+  id            String      @id @default(cuid())
+  boardId       String
+  board         Board       @relation(fields: [boardId], references: [id], onDelete: Cascade)
+  liveSessionId String
+  liveSession   LiveSession @relation(fields: [liveSessionId], references: [id], onDelete: Cascade)
+  username      String
+  body          String
+  createdAt     DateTime    @default(now())
+
+  @@index([boardId, createdAt])
+}
+
+/** Copia del log de combate al terminar la partida (historial). */
+model MatchArchive {
+  id              String   @id @default(cuid())
+  boardId         String
+  board           Board    @relation(fields: [boardId], references: [id], onDelete: Cascade)
+  endedAt         DateTime
+  entries         Json
+  conversationLog Json     @default("[]")
+  createdAt       DateTime @default(now())
+
+  @@index([boardId, endedAt])
+}
+
+model DevNote {
+  id               String   @id @default(cuid())
+  body             String
+  authorUsername   String?
+  createdAt        DateTime @default(now())
 }
 
 model CombatSession {
@@ -142,6 +208,8 @@ model GameObject {
   spriteUrl          String           @default("")
   cards              Card[]
   inventorySlots     InventorySlot[]
+  ownerSessionId     String?          @unique
+  ownerSession       LiveSession?     @relation(fields: [ownerSessionId], references: [id], onDelete: SetNull)
   createdAt          DateTime         @default(now())
   updatedAt          DateTime         @updatedAt
 

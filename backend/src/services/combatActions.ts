@@ -10,6 +10,7 @@ import { effectiveDamage } from "./combatDamage.js";
 import { pickCreatureTarget } from "./combatTargeting.js";
 import { parseActorTurnState, parseStringArray, type ActorTurnStateJson } from "./combatJson.js";
 import { experienceLevelFromTotalXp } from "./progression.js";
+import { getSharedBoardId } from "../config.js";
 
 export type Tx = Prisma.TransactionClient;
 
@@ -269,10 +270,53 @@ async function appendLog(
   sessionId: string,
   type: string,
   payload: Record<string, unknown>,
+  opts?: { actorObjectId?: string },
 ) {
+  const enriched: Record<string, unknown> = { ...payload };
+  if (opts?.actorObjectId) {
+    const go = await tx.gameObject.findUnique({
+      where: { id: opts.actorObjectId },
+      include: { ownerSession: { select: { username: true } } },
+    });
+    if (go) {
+      enriched.actorUsername = go.ownerSession?.username ?? null;
+      enriched.actorCharacterName = go.name;
+    }
+  }
   await tx.combatLogEntry.create({
-    data: { sessionId, type, payload: payload as Prisma.InputJsonValue },
+    data: { sessionId, type, payload: enriched as Prisma.InputJsonValue },
   });
+}
+
+async function archiveMatchFromSession(tx: Tx, combatSessionId: string, boardId: string) {
+  const entries = await tx.combatLogEntry.findMany({
+    where: { sessionId: combatSessionId },
+    orderBy: { createdAt: "asc" },
+  });
+  const roomMsgs = await tx.roomChatMessage.findMany({
+    where: { boardId },
+    orderBy: { createdAt: "asc" },
+  });
+  const conversationLog = roomMsgs.map((m) => ({
+    id: m.id,
+    username: m.username,
+    characterName: m.characterName,
+    body: m.body,
+    createdAt: m.createdAt.toISOString(),
+  }));
+  await tx.matchArchive.create({
+    data: {
+      boardId,
+      endedAt: new Date(),
+      entries: entries.map((e) => ({
+        type: e.type,
+        payload: e.payload,
+        createdAt: e.createdAt.toISOString(),
+      })) as Prisma.InputJsonValue,
+      conversationLog: conversationLog as Prisma.InputJsonValue,
+    },
+  });
+  await tx.roomChatMessage.deleteMany({ where: { boardId } });
 }
 
 async function loadBoardObjects(tx: Tx, boardId: string): Promise<ObjLite[]> {
@@ -422,15 +466,21 @@ async function eliminateCreatureKilledByPlayer(
     killerTotalXp = newXp;
   }
 
-  await appendLog(tx, sessionId, "CREATURE_ELIMINATED", {
-    eliminatedCreatureId: dead.id,
-    eliminatedCreatureName: dead.name,
-    killerId: killerPlayerId,
-    killerName: killer?.name ?? null,
-    experienceGained: xp,
-    killerNewExperienceLevel: killerNewLevel,
-    killerExperiencePoints: killerTotalXp,
-  });
+  await appendLog(
+    tx,
+    sessionId,
+    "CREATURE_ELIMINATED",
+    {
+      eliminatedCreatureId: dead.id,
+      eliminatedCreatureName: dead.name,
+      killerId: killerPlayerId,
+      killerName: killer?.name ?? null,
+      experienceGained: xp,
+      killerNewExperienceLevel: killerNewLevel,
+      killerExperiencePoints: killerTotalXp,
+    },
+    { actorObjectId: killerPlayerId },
+  );
 
   await tx.gameObject.delete({ where: { id: dead.id } });
 }
@@ -451,6 +501,7 @@ async function checkAndEndCombat(tx: Tx, sessionId: string, boardId: string): Pr
     await appendLog(tx, sessionId, "COMBAT_END", {
       reason: allPlayersDead ? "ALL_PLAYERS_DEAD" : "ALL_CREATURES_DEAD",
     });
+    await archiveMatchFromSession(tx, sessionId, boardId);
     return true;
   }
   return false;
@@ -541,25 +592,23 @@ export async function startCombatSession(boardId: string) {
         initialAliveCreatureCount,
       },
     });
-    await tx.combatLogEntry.create({
-      data: {
-        sessionId: session.id,
-        type: "COMBAT_START",
-        payload: { boardId, turnOrder: order },
-      },
-    });
+    await appendLog(tx, session.id, "COMBAT_START", { boardId, turnOrder: order });
     return { session };
   });
 }
 
 export async function endCombatSession(boardId: string) {
-  const s = await prisma.combatSession.findFirst({ where: { boardId, status: "ACTIVE" } });
-  if (!s) return { error: "No hay partida activa" as const };
-  await prisma.combatSession.update({
-    where: { id: s.id },
-    data: { status: "ENDED", endedAt: new Date() },
+  return prisma.$transaction(async (tx) => {
+    const s = await tx.combatSession.findFirst({ where: { boardId, status: "ACTIVE" } });
+    if (!s) return { error: "No hay partida activa" as const };
+    await tx.combatSession.update({
+      where: { id: s.id },
+      data: { status: "ENDED", endedAt: new Date() },
+    });
+    await appendLog(tx, s.id, "COMBAT_END", { reason: "MANUAL_END" });
+    await archiveMatchFromSession(tx, s.id, boardId);
+    return { ok: true as const };
   });
-  return { ok: true as const };
 }
 
 export type PlayerTurnInput = {
@@ -569,7 +618,11 @@ export type PlayerTurnInput = {
   cardAction: { cardId: string; targetId: string } | null;
 };
 
-export async function runPlayerTurn(boardId: string, input: PlayerTurnInput) {
+export async function runPlayerTurn(
+  boardId: string,
+  input: PlayerTurnInput,
+  opts?: { requestingLiveSessionId?: string },
+) {
   return prisma.$transaction(async (tx) => {
     const session = await tx.combatSession.findFirst({
       where: { boardId, status: "ACTIVE" },
@@ -585,6 +638,16 @@ export async function runPlayerTurn(boardId: string, input: PlayerTurnInput) {
     });
     if (!actor || actor.objectKind !== "PLAYER") {
       return { error: "Actor invalido" as const };
+    }
+
+    const shared = getSharedBoardId();
+    if (shared === boardId) {
+      if (!opts?.requestingLiveSessionId) {
+        return { error: "Sesion requerida para el turno del jugador" as const };
+      }
+      if (actor.ownerSessionId !== opts.requestingLiveSessionId) {
+        return { error: "Solo puedes controlar tu personaje" as const };
+      }
     }
 
     let st = parseActorTurnState(session.actorTurnState);
@@ -617,12 +680,18 @@ export async function runPlayerTurn(boardId: string, input: PlayerTurnInput) {
         where: { id: actor.id },
         data: { x: ax, y: ay },
       });
-      await appendLog(tx, session.id, "COMBAT_MOVE", {
-        actorId: actor.id,
-        from: { x: actor.x, y: actor.y },
-        to: { x: ax, y: ay },
-        steps: input.moves.length,
-      });
+      await appendLog(
+        tx,
+        session.id,
+        "COMBAT_MOVE",
+        {
+          actorId: actor.id,
+          from: { x: actor.x, y: actor.y },
+          to: { x: ax, y: ay },
+          steps: input.moves.length,
+        },
+        { actorObjectId: actor.id },
+      );
     }
 
     if (st.forfeitedAttacks && (input.basicAttack || input.cardAction)) {
@@ -678,20 +747,26 @@ export async function runPlayerTurn(boardId: string, input: PlayerTurnInput) {
         where: { id: tgt.id },
         data: { hitpoints: hpAfter },
       });
-      await appendLog(tx, session.id, "BASIC_ATTACK", {
-        category: "BASIC_ATTACK",
-        kind: input.basicAttack.kind,
-        attackerId: actor.id,
-        attackerPos: { x: ax, y: ay },
-        targetId: tgt.id,
-        targetPos: { x: tgt.x, y: tgt.y },
-        attackValue: raw,
-        defenseValue: tgt.defenseValue,
-        damage: dmg,
-        hpBefore,
-        hpAfter,
-        manaCost: 0,
-      });
+      await appendLog(
+        tx,
+        session.id,
+        "BASIC_ATTACK",
+        {
+          category: "BASIC_ATTACK",
+          kind: input.basicAttack.kind,
+          attackerId: actor.id,
+          attackerPos: { x: ax, y: ay },
+          targetId: tgt.id,
+          targetPos: { x: tgt.x, y: tgt.y },
+          attackValue: raw,
+          defenseValue: tgt.defenseValue,
+          damage: dmg,
+          hpBefore,
+          hpAfter,
+          manaCost: 0,
+        },
+        { actorObjectId: actor.id },
+      );
       st = { ...st, basicUsed: true };
       if (hpAfter <= 0 && tgt.objectKind === "CREATURE") {
         await eliminateCreatureKilledByPlayer(tx, session.id, boardId, actor.id, {
@@ -770,21 +845,27 @@ export async function runPlayerTurn(boardId: string, input: PlayerTurnInput) {
         },
       });
 
-      await appendLog(tx, session.id, logType, {
-        category: cat,
-        cardName: card.name,
-        attackerId: actorFresh.id,
-        attackerPos: { x: ax, y: ay },
-        targetId: tgt.id,
-        targetPos: { x: tgt.x, y: tgt.y },
-        attackValue: effectivePower,
-        defenseValue: tgt.defenseValue,
-        damage: dmg,
-        hpBefore,
-        hpAfter,
-        manaCost: manaNeed,
-        staminaCost: staminaNeed,
-      });
+      await appendLog(
+        tx,
+        session.id,
+        logType,
+        {
+          category: cat,
+          cardName: card.name,
+          attackerId: actorFresh.id,
+          attackerPos: { x: ax, y: ay },
+          targetId: tgt.id,
+          targetPos: { x: tgt.x, y: tgt.y },
+          attackValue: effectivePower,
+          defenseValue: tgt.defenseValue,
+          damage: dmg,
+          hpBefore,
+          hpAfter,
+          manaCost: manaNeed,
+          staminaCost: staminaNeed,
+        },
+        { actorObjectId: actorFresh.id },
+      );
       st = { ...st, cardUsed: true };
       if (hpAfter <= 0 && tgt.objectKind === "CREATURE") {
         await eliminateCreatureKilledByPlayer(tx, session.id, boardId, actorFresh.id, {
@@ -855,10 +936,16 @@ export async function runCreatureTurn(boardId: string, actorId: string) {
     });
     const tgt = pickCreatureTarget(players, creature);
     if (!tgt) {
-      await appendLog(tx, session.id, "CREATURE_SKIP", {
-        creatureId: creature.id,
-        reason: "NO_PLAYER_TARGET",
-      });
+      await appendLog(
+        tx,
+        session.id,
+        "CREATURE_SKIP",
+        {
+          creatureId: creature.id,
+          reason: "NO_PLAYER_TARGET",
+        },
+        { actorObjectId: creature.id },
+      );
       const ended = await checkAndEndCombat(tx, session.id, boardId);
       if (!ended) await advanceTurnState(tx, session, actorId);
       const sess2 = await tx.combatSession.findUnique({ where: { id: session.id } });
@@ -891,12 +978,18 @@ export async function runCreatureTurn(boardId: string, actorId: string) {
         where: { id: creature.id },
         data: { x: fx, y: fy },
       });
-      await appendLog(tx, session.id, "COMBAT_MOVE", {
-        actorId: creature.id,
-        from: { x: origX, y: origY },
-        to: { x: fx, y: fy },
-        steps: pathSteps.length,
-      });
+      await appendLog(
+        tx,
+        session.id,
+        "COMBAT_MOVE",
+        {
+          actorId: creature.id,
+          from: { x: origX, y: origY },
+          to: { x: fx, y: fy },
+          steps: pathSteps.length,
+        },
+        { actorObjectId: creature.id },
+      );
       cx = fx;
       cy = fy;
     }
@@ -907,11 +1000,17 @@ export async function runCreatureTurn(boardId: string, actorId: string) {
     });
 
     if (!cellInAttackRange(cx, cy, tgt.x, tgt.y, attackRange)) {
-      await appendLog(tx, session.id, "CREATURE_SKIP", {
-        creatureId: creature.id,
-        reason: "TARGET_OUT_OF_RANGE",
-        targetId: tgt.id,
-      });
+      await appendLog(
+        tx,
+        session.id,
+        "CREATURE_SKIP",
+        {
+          creatureId: creature.id,
+          reason: "TARGET_OUT_OF_RANGE",
+          targetId: tgt.id,
+        },
+        { actorObjectId: creature.id },
+      );
       const ended = await checkAndEndCombat(tx, session.id, boardId);
       if (!ended) await advanceTurnState(tx, session, actorId);
       const sess2 = await tx.combatSession.findUnique({ where: { id: session.id } });
@@ -961,19 +1060,25 @@ export async function runCreatureTurn(boardId: string, actorId: string) {
       data: { hitpoints: hpAfter },
     });
 
-    await appendLog(tx, session.id, usedAbility ? "CREATURE_ABILITY" : "CREATURE_ATTACK", {
-      category: usedAbility ? "CREATURE_ABILITY" : "BASIC_ATTACK",
-      attackerId: creature.id,
-      attackerPos: { x: cx, y: cy },
-      targetId: tgtFresh.id,
-      targetPos: { x: tgtFresh.x, y: tgtFresh.y },
-      attackValue: raw,
-      defenseValue: tgtFresh.defenseValue,
-      damage: dmg,
-      targetHpBefore: hpBefore,
-      targetHpAfter: hpAfter,
-      creatureManaSpent: usedAbility && tpl ? tpl.abilityManaCost : 0,
-    });
+    await appendLog(
+      tx,
+      session.id,
+      usedAbility ? "CREATURE_ABILITY" : "CREATURE_ATTACK",
+      {
+        category: usedAbility ? "CREATURE_ABILITY" : "BASIC_ATTACK",
+        attackerId: creature.id,
+        attackerPos: { x: cx, y: cy },
+        targetId: tgtFresh.id,
+        targetPos: { x: tgtFresh.x, y: tgtFresh.y },
+        attackValue: raw,
+        defenseValue: tgtFresh.defenseValue,
+        damage: dmg,
+        targetHpBefore: hpBefore,
+        targetHpAfter: hpAfter,
+        creatureManaSpent: usedAbility && tpl ? tpl.abilityManaCost : 0,
+      },
+      { actorObjectId: creature.id },
+    );
 
     const ended = await checkAndEndCombat(tx, session.id, boardId);
     if (!ended) await advanceTurnState(tx, session, actorId);

@@ -5,6 +5,15 @@ export const RAW_API_BASE =
   "http://localhost:4000";
 export const API_BASE = RAW_API_BASE.replace(/\/+$/, "");
 
+/** Si coincide con el backend (SHARED_BOARD_ID), modo sala global con login y WS. */
+export const SHARED_BOARD_ID =
+  (import.meta.env.VITE_SHARED_BOARD_ID as string | undefined)?.trim() || "";
+
+export const USE_SHARED_ROOM = Boolean(SHARED_BOARD_ID);
+
+export const LIVE_SESSION_TOKEN_KEY = "tbg_live_session_token";
+export const LIVE_SESSION_USERNAME_KEY = "tbg_live_session_username";
+
 export const EQUIPMENT_SLOTS: EquipmentSlot[] = [
   "Helmet",
   "Armor",

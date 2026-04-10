@@ -22,6 +22,10 @@ import {
   createItemTemplateSchema,
   createLootEntrySchema,
   createObjectSchema,
+  devNoteCreateSchema,
+  joinSessionSchema,
+  lobbyDevBodySchema,
+  patchSessionSchema,
   moveObjectSchema,
   setDungeonFloorSchema,
   spawnCreatureSchema,
@@ -34,6 +38,21 @@ import {
   updateItemTemplateSchema,
   updateObjectSchema,
 } from "./validation.js";
+import { getSharedBoardId } from "./config.js";
+import { loadLiveSession, enforceSharedBoardApi } from "./middleware/sharedBoardAuth.js";
+import {
+  bootstrapLiveSession,
+  joinLiveSession,
+  getPublicPresence,
+  patchSessionUsername,
+} from "./services/liveSession.js";
+import {
+  broadcastLobbyDevChatRow,
+  notifyBoardRefresh,
+  notifyCombatUpdate,
+  notifyPresenceUpdate,
+} from "./realtime/wsHub.js";
+import { isSharedBoard, sessionHasPlayerObject } from "./services/boardSessionRules.js";
 import {
   boardHasActiveCombat,
   collectGroundLoot,
@@ -49,6 +68,164 @@ export const app = express();
 
 app.use(cors());
 app.use(express.json());
+app.use(loadLiveSession);
+app.use(enforceSharedBoardApi);
+
+function realtimeBoard(boardId: string, opts?: { presence?: boolean }) {
+  notifyBoardRefresh(boardId);
+  if (opts?.presence) void notifyPresenceUpdate();
+}
+
+function realtimeCombat(boardId: string) {
+  notifyCombatUpdate(boardId);
+  notifyBoardRefresh(boardId);
+}
+
+app.post("/api/sessions/join", async (req, res) => {
+  const parsed = joinSessionSchema.safeParse(req.body);
+  if (!parsed.success) return res.status(400).json(parsed.error.flatten());
+  const r = await joinLiveSession(parsed.data.username);
+  if ("error" in r) {
+    const code = r.error.includes("llena") ? 403 : 400;
+    return res.status(code).json({ message: r.error });
+  }
+  res.status(201).json({
+    token: r.token,
+    sessionId: r.sessionId,
+    boardId: r.boardId,
+    needsUsername: false,
+  });
+});
+
+app.post("/api/sessions/bootstrap", async (_req, res) => {
+  const r = await bootstrapLiveSession();
+  if ("error" in r) {
+    const code = r.error.includes("llena") ? 403 : 400;
+    return res.status(code).json({ message: r.error });
+  }
+  res.status(201).json({
+    token: r.token,
+    sessionId: r.sessionId,
+    boardId: r.boardId,
+    needsUsername: r.needsUsername,
+  });
+});
+
+app.get("/api/sessions/me", async (req, res) => {
+  if (!req.liveSession) return res.status(401).json({ message: "Sesion no encontrada" });
+  const s = req.liveSession;
+  res.json({
+    sessionId: s.id,
+    username: s.username,
+    displayNameSet: s.displayNameSet,
+    needsUsername: !s.displayNameSet,
+    boardId: getSharedBoardId(),
+    playerObjectId: s.ownedPlayer?.id ?? null,
+  });
+});
+
+app.patch("/api/sessions/me", async (req, res) => {
+  if (!req.liveSession) return res.status(401).json({ message: "Sesion no encontrada" });
+  const parsed = patchSessionSchema.safeParse(req.body);
+  if (!parsed.success) return res.status(400).json(parsed.error.flatten());
+  const r = await patchSessionUsername(req.liveSession.id, parsed.data.username);
+  if ("error" in r) {
+    const code = r.error.includes("llena")
+      ? 403
+      : r.error.includes("asignado")
+        ? 409
+        : 400;
+    return res.status(code).json({ message: r.error });
+  }
+  res.json({ ok: true });
+});
+
+app.get("/api/sessions/presence", async (_req, res) => {
+  const p = await getPublicPresence();
+  res.json(p);
+});
+
+app.get("/api/room-chat/recent", async (req, res) => {
+  const shared = getSharedBoardId();
+  if (!shared) return res.status(404).json({ message: "Sala no configurada" });
+  if (!req.liveSession?.displayNameSet) {
+    return res.status(403).json({ message: "Asigna tu nombre de usuario para continuar" });
+  }
+  const limit = Math.min(100, Math.max(1, Number(req.query.limit) || 30));
+  const rows = await prisma.roomChatMessage.findMany({
+    where: { boardId: shared },
+    orderBy: { createdAt: "desc" },
+    take: limit,
+  });
+  res.json([...rows].reverse());
+});
+
+app.get("/api/lobby-dev-chat", async (req, res) => {
+  const shared = getSharedBoardId();
+  if (!shared) return res.status(404).json({ message: "Sala no configurada" });
+  const take = Math.min(200, Math.max(1, Number(req.query.limit) || 100));
+  const rows = await prisma.lobbyDevChatMessage.findMany({
+    where: { boardId: shared },
+    orderBy: { createdAt: "desc" },
+    take,
+  });
+  res.json([...rows].reverse());
+});
+
+app.post("/api/lobby-dev-chat", async (req, res) => {
+  const shared = getSharedBoardId();
+  if (!shared) return res.status(404).json({ message: "Sala no configurada" });
+  if (!req.liveSession?.displayNameSet) {
+    return res.status(403).json({ message: "Asigna tu nombre de usuario para continuar" });
+  }
+  if (await boardHasActiveCombat(shared)) {
+    return res
+      .status(403)
+      .json({ message: "El chat entre partidas no esta disponible durante el combate" });
+  }
+  const parsed = lobbyDevBodySchema.safeParse(req.body);
+  if (!parsed.success) return res.status(400).json(parsed.error.flatten());
+  const row = await prisma.lobbyDevChatMessage.create({
+    data: {
+      boardId: shared,
+      liveSessionId: req.liveSession.id,
+      username: req.liveSession.username,
+      body: parsed.data.body,
+    },
+  });
+  broadcastLobbyDevChatRow(row);
+  res.status(201).json(row);
+});
+
+app.get("/api/match-history", async (req, res) => {
+  const take = Math.min(50, Math.max(1, Number(req.query.limit) || 20));
+  const skip = Math.max(0, Number(req.query.offset) || 0);
+  const list = await prisma.matchArchive.findMany({
+    orderBy: { endedAt: "desc" },
+    take,
+    skip,
+    include: { board: { select: { name: true } } },
+  });
+  res.json(list);
+});
+
+app.get("/api/dev-notes", async (_req, res) => {
+  const rows = await prisma.devNote.findMany({
+    orderBy: { createdAt: "desc" },
+    take: 100,
+  });
+  res.json(rows);
+});
+
+app.post("/api/dev-notes", async (req, res) => {
+  const parsed = devNoteCreateSchema.safeParse(req.body);
+  if (!parsed.success) return res.status(400).json(parsed.error.flatten());
+  const author = req.liveSession?.username ?? null;
+  const row = await prisma.devNote.create({
+    data: { body: parsed.data.body, authorUsername: author },
+  });
+  res.status(201).json(row);
+});
 
 function mergeDefined<E extends Record<string, unknown>>(base: E, patch: Partial<E>): E {
   const out = { ...base };
@@ -346,6 +523,7 @@ app.post("/boards/:boardId/spawn-creature", async (req, res) => {
       include: { cards: true, inventorySlots: true },
     });
     await pushPendingCombatant(req.params.boardId, obj.id);
+    realtimeBoard(req.params.boardId);
     res.status(201).json(obj);
   } catch (error) {
     if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2002") {
@@ -363,12 +541,14 @@ app.get("/boards/:boardId/combat", async (req, res) => {
 app.post("/boards/:boardId/combat/start", async (req, res) => {
   const r = await startCombatSession(req.params.boardId);
   if ("error" in r) return res.status(400).json({ message: r.error });
+  realtimeCombat(req.params.boardId);
   res.status(201).json(r.session);
 });
 
 app.post("/boards/:boardId/combat/end", async (req, res) => {
   const r = await endCombatSession(req.params.boardId);
   if ("error" in r) return res.status(400).json({ message: r.error });
+  realtimeCombat(req.params.boardId);
   res.json({ ok: true });
 });
 
@@ -376,13 +556,18 @@ app.post("/boards/:boardId/combat/turn/player", async (req, res) => {
   const parsed = combatPlayerTurnSchema.safeParse(req.body);
   if (!parsed.success) return res.status(400).json(parsed.error.flatten());
   const body = parsed.data;
-  const r = await runPlayerTurn(req.params.boardId, {
-    actorId: body.actorId,
-    moves: body.moves,
-    basicAttack: body.basicAttack ?? null,
-    cardAction: body.cardAction ?? null,
-  });
+  const r = await runPlayerTurn(
+    req.params.boardId,
+    {
+      actorId: body.actorId,
+      moves: body.moves,
+      basicAttack: body.basicAttack ?? null,
+      cardAction: body.cardAction ?? null,
+    },
+    req.liveSession ? { requestingLiveSessionId: req.liveSession.id } : undefined,
+  );
   if ("error" in r) return res.status(400).json({ message: r.error });
+  realtimeCombat(req.params.boardId);
   res.json(r);
 });
 
@@ -391,6 +576,7 @@ app.post("/boards/:boardId/combat/turn/creature", async (req, res) => {
   if (!parsed.success) return res.status(400).json(parsed.error.flatten());
   const r = await runCreatureTurn(req.params.boardId, parsed.data.actorId);
   if ("error" in r) return res.status(400).json({ message: r.error });
+  realtimeCombat(req.params.boardId);
   res.json(r);
 });
 
@@ -405,8 +591,23 @@ app.get("/boards/:boardId/ground-loot", async (req, res) => {
 app.post("/objects/:id/collect-ground-loot", async (req, res) => {
   const parsed = collectGroundLootSchema.safeParse(req.body);
   if (!parsed.success) return res.status(400).json(parsed.error.flatten());
+
+  const playerRow = await prisma.gameObject.findUnique({ where: { id: req.params.id } });
+  if (!playerRow || playerRow.objectKind !== "PLAYER") {
+    return res.status(400).json({ message: "Solo un jugador puede recoger del suelo" });
+  }
+  if (
+    isSharedBoard(playerRow.boardId) &&
+    playerRow.ownerSessionId &&
+    req.liveSession &&
+    playerRow.ownerSessionId !== req.liveSession.id
+  ) {
+    return res.status(403).json({ message: "Solo tu personaje puede recoger aqui" });
+  }
+
   const r = await collectGroundLoot(req.params.id, parsed.data.x, parsed.data.y);
   if ("error" in r) return res.status(400).json({ message: r.error });
+  realtimeBoard(playerRow.boardId);
   res.json(r);
 });
 
@@ -459,6 +660,14 @@ app.post("/objects/:id/collect-loot", async (req, res) => {
     include: { inventorySlots: true },
   });
   if (!collector) return res.status(404).json({ message: "Coleccionista no encontrado" });
+  if (
+    isSharedBoard(collector.boardId) &&
+    collector.ownerSessionId &&
+    req.liveSession &&
+    collector.ownerSessionId !== req.liveSession.id
+  ) {
+    return res.status(403).json({ message: "Solo tu personaje puede recoger este loot" });
+  }
 
   const loot = creature.creatureTemplate?.lootEntries ?? [];
   if (loot.length === 0) {
@@ -504,6 +713,7 @@ app.post("/objects/:id/collect-loot", async (req, res) => {
     where: { id: collector.id },
     include: { inventorySlots: true, cards: true },
   });
+  realtimeBoard(collector.boardId);
   res.json({ added: created, collector: updated });
 });
 
@@ -518,6 +728,14 @@ app.post("/objects/:objectId/cards/from-template", async (req, res) => {
   if (!obj) return res.status(404).json({ message: "Objeto no encontrado" });
   if (obj.objectKind !== "PLAYER") {
     return res.status(400).json({ message: "Solo los jugadores tienen mazo de cartas" });
+  }
+  if (
+    isSharedBoard(obj.boardId) &&
+    obj.ownerSessionId &&
+    req.liveSession &&
+    obj.ownerSessionId !== req.liveSession.id
+  ) {
+    return res.status(403).json({ message: "Solo puedes editar tu personaje" });
   }
   if (obj.cards.length >= 5) {
     return res.status(400).json({ message: "Máximo 5 cartas por jugador" });
@@ -546,6 +764,7 @@ app.post("/objects/:objectId/cards/from-template", async (req, res) => {
     where: { id: obj.id },
     include: { cards: true, inventorySlots: true },
   });
+  realtimeBoard(obj.boardId);
   res.status(201).json({ card: created, object: full });
 });
 
@@ -560,6 +779,14 @@ app.post("/objects/:objectId/cards/:cardId/use", async (req, res) => {
   if (!obj) return res.status(404).json({ message: "Objeto no encontrado" });
   if (obj.objectKind !== "PLAYER") {
     return res.status(400).json({ message: "Solo los jugadores pueden usar cartas" });
+  }
+  if (
+    isSharedBoard(obj.boardId) &&
+    obj.ownerSessionId &&
+    req.liveSession &&
+    obj.ownerSessionId !== req.liveSession.id
+  ) {
+    return res.status(403).json({ message: "Solo puedes usar cartas de tu personaje" });
   }
 
   const card = obj.cards.find((c) => c.id === cardId);
@@ -605,6 +832,7 @@ app.post("/objects/:objectId/cards/:cardId/use", async (req, res) => {
     });
   });
 
+  realtimeBoard(obj.boardId);
   res.json({
     object: updated,
     used: {
@@ -699,6 +927,7 @@ app.post("/boards/:id/equipment-items", async (req, res) => {
     const item = await prisma.equipmentItem.create({
       data: { boardId: req.params.id, ...parsed.data },
     });
+    realtimeBoard(req.params.id);
     res.status(201).json(item);
   } catch (error) {
     if (
@@ -720,6 +949,7 @@ app.patch("/equipment-items/:id", async (req, res) => {
       where: { id: req.params.id },
       data: parsed.data,
     });
+    realtimeBoard(item.boardId);
     res.json(item);
   } catch (error) {
     if (
@@ -740,7 +970,9 @@ app.patch("/equipment-items/:id", async (req, res) => {
 
 app.delete("/equipment-items/:id", async (req, res) => {
   try {
+    const prev = await prisma.equipmentItem.findUnique({ where: { id: req.params.id } });
     await prisma.equipmentItem.delete({ where: { id: req.params.id } });
+    if (prev) realtimeBoard(prev.boardId);
     res.status(204).send();
   } catch {
     res.status(404).json({ message: "Item no encontrado" });
@@ -798,6 +1030,45 @@ app.post("/boards/:id/sync", async (req, res) => {
     return res.status(400).json({ message: "Partida activa: sincronizacion deshabilitada" });
   }
 
+  const boardIdSync = req.params.id;
+  const lsSync = req.liveSession;
+  if (isSharedBoard(boardIdSync) && lsSync) {
+    const createsPlayer = parsed.data.objects.filter((o) => !o.id && o.objectKind === "PLAYER");
+    if (createsPlayer.length > 1) {
+      return res.status(400).json({ message: "Solo un personaje por sincronizacion" });
+    }
+    if (createsPlayer.length === 1 && (await sessionHasPlayerObject(lsSync.id))) {
+      return res.status(400).json({ message: "Ya tienes un personaje vinculado a tu sesion" });
+    }
+    for (const incoming of parsed.data.objects) {
+      if (!incoming.id) continue;
+      const ex = await prisma.gameObject.findFirst({
+        where: { id: incoming.id, boardId: boardIdSync },
+      });
+      if (
+        ex?.objectKind === "PLAYER" &&
+        ex.ownerSessionId &&
+        ex.ownerSessionId !== lsSync.id
+      ) {
+        return res.status(403).json({ message: "No puedes editar el personaje de otro jugador" });
+      }
+      if (ex?.objectKind === "PLAYER" && !ex.ownerSessionId && lsSync) {
+        const mine = await prisma.gameObject.findFirst({
+          where: {
+            boardId: boardIdSync,
+            ownerSessionId: lsSync.id,
+            objectKind: "PLAYER",
+          },
+        });
+        if (mine && mine.id !== ex.id) {
+          return res.status(403).json({
+            message: "Ya tienes un personaje; no puedes editar otro sin vincular",
+          });
+        }
+      }
+    }
+  }
+
   let created = 0;
   let updated = 0;
   let merged = 0;
@@ -842,10 +1113,17 @@ app.post("/boards/:id/sync", async (req, res) => {
         : null;
 
       if (!existing) {
+        const ownerExtra =
+          isSharedBoard(req.params.id) &&
+          lsSync &&
+          incomingRest.objectKind === "PLAYER"
+            ? { ownerSessionId: lsSync.id }
+            : {};
         const createdObject = await tx.gameObject.create({
           data: {
             boardId: req.params.id,
             ...incomingRest,
+            ...ownerExtra,
             cards: { create: cards.map(cardToCreate) },
             inventorySlots: {
               create: inventorySlots.map(({ slotIndex, itemName, weight, quantity }) => ({
@@ -921,10 +1199,28 @@ app.post("/boards/:id/sync", async (req, res) => {
         continue;
       }
 
+      let claimOwner: { ownerSessionId: string } | Record<string, never> = {};
+      if (
+        isSharedBoard(req.params.id) &&
+        lsSync &&
+        existing.objectKind === "PLAYER" &&
+        !existing.ownerSessionId
+      ) {
+        const mine = await tx.gameObject.findFirst({
+          where: {
+            boardId: req.params.id,
+            ownerSessionId: lsSync.id,
+            objectKind: "PLAYER",
+          },
+        });
+        if (!mine) claimOwner = { ownerSessionId: lsSync.id };
+      }
+
       await tx.gameObject.update({
         where: { id: existing.id },
         data: {
           ...incomingRest,
+          ...claimOwner,
         },
       });
 
@@ -958,6 +1254,7 @@ app.post("/boards/:id/sync", async (req, res) => {
     return result;
   });
 
+  realtimeBoard(req.params.id, { presence: isSharedBoard(req.params.id) });
   res.json({ created, updated, merged, objects: synced });
 });
 
@@ -975,6 +1272,16 @@ app.post("/boards/:id/objects", async (req, res) => {
   }
 
   const { cards, inventorySlots, ...rest } = parsed.data;
+  const boardIdObj = req.params.id;
+
+  if (isSharedBoard(boardIdObj) && rest.objectKind === "PLAYER") {
+    if (!req.liveSession) {
+      return res.status(401).json({ message: "Sesion requerida" });
+    }
+    if (await sessionHasPlayerObject(req.liveSession.id)) {
+      return res.status(400).json({ message: "Ya tienes un personaje en este tablero" });
+    }
+  }
 
   const norm = await normalizeGameObjectCombatAndProgression(prisma, req.params.id, {
     helmet: rest.helmet,
@@ -1004,11 +1311,17 @@ app.post("/boards/:id/objects", async (req, res) => {
   });
   const body = { ...rest, ...norm };
 
+  const ownerOnCreate =
+    isSharedBoard(boardIdObj) && body.objectKind === "PLAYER" && req.liveSession
+      ? { ownerSessionId: req.liveSession.id }
+      : {};
+
   try {
     const object = await prisma.gameObject.create({
       data: {
         boardId: req.params.id,
         ...body,
+        ...ownerOnCreate,
         cards: {
           create: cards.map(cardToCreate),
         },
@@ -1022,6 +1335,9 @@ app.post("/boards/:id/objects", async (req, res) => {
         },
       },
       include: { cards: true, inventorySlots: true },
+    });
+    realtimeBoard(req.params.id, {
+      presence: isSharedBoard(boardIdObj) && body.objectKind === "PLAYER",
     });
     res.status(201).json(object);
   } catch (error) {
@@ -1049,6 +1365,24 @@ app.patch("/objects/:id", async (req, res) => {
 
   if (await boardHasActiveCombat(existingRow.boardId)) {
     return res.status(400).json({ message: "Partida activa: no se pueden editar objetos" });
+  }
+
+  if (
+    isSharedBoard(existingRow.boardId) &&
+    existingRow.objectKind === "PLAYER" &&
+    req.liveSession
+  ) {
+    if (
+      existingRow.ownerSessionId &&
+      existingRow.ownerSessionId !== req.liveSession.id
+    ) {
+      return res.status(403).json({ message: "No puedes editar el personaje de otro jugador" });
+    }
+    if (!existingRow.ownerSessionId) {
+      if (await sessionHasPlayerObject(req.liveSession.id)) {
+        return res.status(400).json({ message: "Ya tienes un personaje vinculado" });
+      }
+    }
   }
 
   try {
@@ -1114,12 +1448,21 @@ app.patch("/objects/:id", async (req, res) => {
         boardId: _boardId,
         createdAt: _ca,
         updatedAt: _ua,
+        ownerSessionId: _os,
         ...updatePayload
       } = finalRow;
 
+      const claimOwnerPatch =
+        isSharedBoard(existing.boardId) &&
+        req.liveSession &&
+        existing.objectKind === "PLAYER" &&
+        !existing.ownerSessionId
+          ? { ownerSessionId: req.liveSession.id }
+          : {};
+
       const object = await tx.gameObject.update({
         where: { id: req.params.id },
-        data: updatePayload,
+        data: { ...updatePayload, ...claimOwnerPatch },
       });
 
       if (cards) {
@@ -1151,6 +1494,9 @@ app.patch("/objects/:id", async (req, res) => {
       });
     });
 
+    realtimeBoard(existingRow.boardId, {
+      presence: isSharedBoard(existingRow.boardId) && existingRow.objectKind === "PLAYER",
+    });
     res.json(updated);
   } catch (error) {
     if (
@@ -1175,8 +1521,20 @@ app.delete("/objects/:id", async (req, res) => {
   if (await boardHasActiveCombat(row.boardId)) {
     return res.status(400).json({ message: "Partida activa: no eliminar objetos" });
   }
+  if (
+    isSharedBoard(row.boardId) &&
+    row.objectKind === "PLAYER" &&
+    row.ownerSessionId &&
+    req.liveSession &&
+    row.ownerSessionId !== req.liveSession.id
+  ) {
+    return res.status(403).json({ message: "No puedes eliminar el personaje de otro jugador" });
+  }
   try {
     await prisma.gameObject.delete({ where: { id: req.params.id } });
+    realtimeBoard(row.boardId, {
+      presence: isSharedBoard(row.boardId) && row.objectKind === "PLAYER",
+    });
     res.status(204).send();
   } catch {
     res.status(404).json({ message: "Objeto no encontrado" });
@@ -1198,6 +1556,16 @@ app.post("/objects/:id/move", async (req, res) => {
 
   if (object.objectKind === "PLAYER" && object.staminaPoints <= 0) {
     return res.status(400).json({ message: "Stamina insuficiente" });
+  }
+
+  if (
+    isSharedBoard(object.boardId) &&
+    object.objectKind === "PLAYER" &&
+    object.ownerSessionId &&
+    req.liveSession &&
+    object.ownerSessionId !== req.liveSession.id
+  ) {
+    return res.status(403).json({ message: "No puedes mover el personaje de otro jugador" });
   }
 
   const distance = Math.abs(object.x - parsed.data.x) + Math.abs(object.y - parsed.data.y);
@@ -1227,5 +1595,6 @@ app.post("/objects/:id/move", async (req, res) => {
     include: { cards: true, inventorySlots: true },
   });
 
+  realtimeBoard(object.boardId);
   res.json(moved);
 });
