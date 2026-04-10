@@ -192,6 +192,16 @@ Este repo incluye `render.yaml` para crear un **Static Site** en Render usando `
    - `VITE_API_BASE_URL=https://TU-BACKEND.onrender.com`
 5. Ejecuta deploy.
 
+### Backend en Render (persistencia + seed inicial)
+
+- `render.yaml` configura el backend con disco persistente (`/var/data`) y `DATABASE_URL=file:///var/data/dev.db`.
+- `startCommand` usa `npm --prefix backend run render:start`, que ejecuta:
+  1. `prisma:prepare`
+  2. `seed:poi` (idempotente)
+  3. `start`
+
+Con esto, al reiniciar en producción no se deben perder registros mientras el disco siga adjunto, y la configuración inicial POI se carga automáticamente cuando la DB está vacía.
+
 ### Importante
 
 - Este despliegue es **solo frontend estatico**.

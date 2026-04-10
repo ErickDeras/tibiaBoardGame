@@ -53,12 +53,47 @@ Adicionalmente, el frontend ahora muestra errores mas claros cuando no puede con
 - **Build Command**:
   - `npm --prefix backend ci && npm --prefix backend run prisma:generate && npm --prefix backend run build`
 - **Start Command**:
-  - `npm --prefix backend run prisma:push && npm --prefix backend run start`
+  - `npm --prefix backend run render:start`
 - **Environment Variables**:
-  - `DATABASE_URL=file:/var/data/dev.db`
+  - `DATABASE_URL=file:///var/data/dev.db` (tres `/` tras `file:`)
   - `PORT=10000`
 - **Disk**:
   - mount path `/var/data` (1 GB)
+
+Con `render:start` el backend hace:
+
+1. `prisma:prepare` (genera cliente + aplica esquema en la DB persistente)
+2. `seed:poi` (seed idempotente; si POI ya existe no duplica nada)
+3. `start` (arranque del servidor)
+
+Esto asegura que, al reiniciar el servicio, la configuración inicial (mazmorra POI, jugador, mobs) quede cargada cuando la base está vacía.
+
+### Upgrade a plan de pago (sin perder datos)
+
+Para minimizar riesgo de pérdida tras reinicios:
+
+1. Mantén el **Persistent Disk** montado en `/var/data`.
+2. Conserva `DATABASE_URL=file:///var/data/dev.db`.
+3. Antes de cambiar de plan, verifica en Render que el disco esté asociado al mismo servicio.
+4. Tras el upgrade, ejecuta un deploy manual y revisa logs del backend:
+   - debe aparecer `[seed] Mazmorra "POI" ...` (creada o ya existe).
+
+Si en el futuro quieres escalar horizontalmente (más de 1 instancia), migra de SQLite a PostgreSQL administrado; SQLite no está pensado para múltiples réplicas escribiendo en paralelo.
+
+### Error: `Permission denied (os error 13)` al crear SQLite en `/var/data`
+
+Significa que Prisma/SQLite no puede usar el directorio del archivo `dev.db`. Comprueba en Render:
+
+1. **Persistent Disk** está creado y **adjunto al mismo Web Service** del backend.
+2. **Mount path** es exactamente `/var/data` (sin barra final extra).
+3. Variable **`DATABASE_URL`** es `file:///var/data/dev.db` (no `file:/var/data/dev.db` si sigues viendo errores de ruta).
+4. Tras añadir o cambiar el disco, haz **Manual Deploy** del backend.
+
+El script `scripts/render-start.sh` falla al inicio con un mensaje claro si `/var/data` no existe o no es escribible.
+
+### Aviso deprecado `package.json#prisma`
+
+Se eliminó el bloque `prisma` de `backend/package.json`. El seed inicial se ejecuta con `npm run seed:poi` (ya incluido en `render:start`). Para seed manual en local: `cd backend && npm run seed:poi`.
 
 #### 2) Frontend (Static Site)
 
